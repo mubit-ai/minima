@@ -10,6 +10,7 @@
 import { useEffect, useRef } from "react";
 import type { AgentEvent } from "../agent/events.ts";
 import type { AssistantMessage } from "../ai/types.ts";
+import { type AgentEventSeam, subscribeAgentEvents } from "../frontend.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import { isHarnessSteerText } from "../minima/stop_gate.ts";
 import { type ActiveAction, reduceActiveActions } from "./current_action.ts";
@@ -28,13 +29,16 @@ export interface AgentEventCallbacks {
 }
 
 /**
- * Subscribe to the agent event stream once (per `agent` identity).
+ * Subscribe to the agent event stream once (per `agent` identity) — through the front-end's
+ * event seam, so what this front-end is watching is readable from the contract rather than
+ * only from here.
  *
  * `pendingEchoRef` and `showThinkingRef` stay owned by the component — onSubmit sets the
  * former, and the render tree reads the latter.
  */
 export function useAgentEvents(
   agent: MinimaAgent,
+  seam: AgentEventSeam,
   pendingEchoRef: React.MutableRefObject<boolean>,
   showThinkingRef: React.RefObject<boolean>,
   cb: AgentEventCallbacks,
@@ -53,7 +57,7 @@ export function useAgentEvents(
   cbRef.current = cb;
 
   useEffect(() => {
-    const unsub = agent.subscribe((ev: AgentEvent) => {
+    seam.listener = (ev: AgentEvent) => {
       const {
         pushMessage,
         setStreaming,
@@ -196,7 +200,11 @@ export function useAgentEvents(
           refreshPlanStrip();
           break;
       }
-    });
-    return unsub;
-  }, [agent, pendingEchoRef, showThinkingRef]);
+    };
+    const unsub = subscribeAgentEvents(agent, seam);
+    return () => {
+      unsub();
+      seam.listener = null;
+    };
+  }, [agent, seam, pendingEchoRef, showThinkingRef]);
 }

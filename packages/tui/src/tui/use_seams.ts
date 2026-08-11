@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { bundleForMode, getMode } from "../agent/modes.ts";
 import { emitGuardEvent } from "../agent/policy.ts";
 import type { BeforeToolCall } from "../agent/tools.ts";
+import type { PermissionSeam } from "../frontend.ts";
 import type { VerifyConsent } from "../minima/big_plan.ts";
 import type { MinimaAgent } from "../minima/runtime.ts";
 import type { ChildEvent } from "../minima/spawn.ts";
@@ -92,9 +93,11 @@ export function useQuestionPrompt(
 }
 
 /**
- * Wire the beforeToolCall permission hook, then the plan done-gate (when on) so
- * permission always runs first — first block wins, and no gate check ever executes for a
- * call the user declines.
+ * Fill the permission seam, then register the plan done-gate (when on) so permission always
+ * runs first — first block wins, and no gate check ever executes for a call the user
+ * declines. cli/main.ts put the seam's delegator on the hook stack before this tree mounted
+ * (ahead of the ckpt/gate registrations below and behind bash-steer), so filling the slot
+ * here is what arms the overlay and emptying it on unmount is what disarms it.
  *
  * Plan mode DENIES at the dispatcher (Claude Code parity, 2026-07-20 — supersedes the B2
  * ask-every-time flow): the FULL planModeBlockedTools list (permissions.ts, single tested
@@ -106,14 +109,22 @@ export function useQuestionPrompt(
  */
 export function useToolCallHooks(opts: {
   agent: MinimaAgent;
+  permissionSeam: PermissionSeam;
   bigPlanGateBefore?: BeforeToolCall | null;
   resolveRepoTop: () => string | null;
   permStateRef: React.MutableRefObject<PermissionState>;
   setPermPrompt: (p: PermissionPrompt) => void;
   pushMessage: (m: ChatMessage) => void;
 }): React.MutableRefObject<(() => void) | null> {
-  const { agent, bigPlanGateBefore, resolveRepoTop, permStateRef, setPermPrompt, pushMessage } =
-    opts;
+  const {
+    agent,
+    permissionSeam,
+    bigPlanGateBefore,
+    resolveRepoTop,
+    permStateRef,
+    setPermPrompt,
+    pushMessage,
+  } = opts;
   const checkpointArmRef = useRef<(() => void) | null>(null);
   // Stable seam for the callbacks so the hook stack re-registers on `agent` identity only —
   // re-registering per render would reorder permission/checkpoint/gate against each other.
@@ -131,7 +142,7 @@ export function useToolCallHooks(opts: {
       },
       getBundle: () => bundleForMode(getMode()),
     });
-    const disposePermission = agent.addBeforeToolCall(async (ctx) => {
+    permissionSeam.current = async (ctx) => {
       if (getMode() === "plan") {
         const bigPlanOn = agent.config.bigPlan === true;
         if (planModeBlockedTools(bigPlanOn).includes(ctx.toolCall.name)) {
@@ -143,7 +154,7 @@ export function useToolCallHooks(opts: {
         }
       }
       return modeGated(ctx);
-    });
+    };
     // B3: checkpoint snapshot rides between the permission gate (a denied call must not
     // snapshot) and the plan done-gate (a done-gate block after a snapshot is harmless — deduped by
     // tree). Same effect as its neighbors: a separate effect with different deps would lose
@@ -167,8 +178,8 @@ export function useToolCallHooks(opts: {
       disposeGate?.();
       disposeCkpt();
       checkpointArmRef.current = null;
-      disposePermission();
+      permissionSeam.current = null;
     };
-  }, [agent, bigPlanGateBefore, resolveRepoTop, permStateRef]);
+  }, [agent, bigPlanGateBefore, resolveRepoTop, permStateRef, permissionSeam]);
   return checkpointArmRef;
 }

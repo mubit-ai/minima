@@ -364,6 +364,12 @@ export function checkPermission(
         argsSummary: formatToolArgs(toolName, args),
         promptText: `read from ${targetDir}`,
         args,
+        // The scope of an "always" here is this directory tree, not the tool — named on the same
+        // line that records the grant below, so the promise a front-end shows and the promise the
+        // state keeps cannot drift. The terminal overlay renders its own "[a] Always for this
+        // directory" for read tools and never reads this field; ACP puts it in the option's name,
+        // where an unscoped label would understate what the user is granting.
+        alwaysLabel: `Always allow reading ${targetDir}`,
         resolve: (decision) => {
           if (decision === "always") {
             state.allowedDirs.add(targetDir);

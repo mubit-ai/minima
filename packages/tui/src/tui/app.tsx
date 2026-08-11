@@ -29,6 +29,7 @@ import type { DashboardSupervisor } from "../dashboard/supervisor.ts";
 import { metricsReport } from "../db/metrics.ts";
 import { type RehydratedRun, applyRehydratedRun, rehydrateRun } from "../db/rehydrate.ts";
 import { errText } from "../errtext.ts";
+import type { PromptingFrontEnd } from "../frontend.ts";
 import {
   type AgentType,
   type AgentTypeRegistry,
@@ -36,12 +37,7 @@ import {
   scaffoldAgentType,
 } from "../minima/agent_types.ts";
 import { type LedgerBehavior, gateConfidence, ledgerBehavior } from "../minima/behavior.ts";
-import {
-  type PlanStripInfo,
-  type VerifyConsent,
-  planStripInfo,
-  stampVerifiedOutcome,
-} from "../minima/big_plan.ts";
+import { type PlanStripInfo, planStripInfo, stampVerifiedOutcome } from "../minima/big_plan.ts";
 import { BudgetLedger, type BudgetStatus } from "../minima/budget.ts";
 import { refreshCatalog } from "../minima/catalog.ts";
 import {
@@ -105,7 +101,7 @@ import {
 } from "../skills.ts";
 import { expandAtFiles } from "../tools/at_mentions.ts";
 import { exitPlanTool } from "../tools/exit_plan.ts";
-import type { AskUserRef, QuestionOption } from "../tools/question.ts";
+import type { QuestionOption } from "../tools/question.ts";
 import { skillTool } from "../tools/skill.ts";
 import type { SpawnFn } from "../tools/task.ts";
 import type { TodoTask } from "../tools/todowrite.ts";
@@ -252,10 +248,16 @@ import { type ScrollState, buildLineIndex, scrollLinesBy, windowLines } from "./
 export interface AppProps {
   agent: MinimaAgent;
   banner?: string;
-  /** Late-bound slot the `question` tool reads; populated here once the overlay is wired. */
-  askUserRef?: AskUserRef;
-  /** Mutable ref written by main.ts so HarnessApp can receive sub-agent events. */
-  childEventRef?: { handler: ((e: ChildEvent) => void) | null };
+  /**
+   * The run's front-end contract (frontend.ts). This component is the terminal UI's
+   * implementation of it: it fills the seams it can serve on mount — the permission hook, the
+   * `question` overlay, the overlay-backed verify-consent checker, the sub-agent event handler
+   * and the event-stream listener — and empties them on unmount, so a seam is bound in exactly
+   * one place instead of through refs only cli/main.ts's call site knew about. Narrowed to a
+   * front-end that prompts: this component's whole permission surface is an overlay, so one
+   * that declares it never asks has nothing to render it into.
+   */
+  frontEnd: PromptingFrontEnd;
   /**
    * Rehydrated run from the `--resume` CLI flag (B1): main.ts resolves + applies it to the
    * agent BEFORE first render; the app seeds its transcript and footer stats from it so
@@ -272,17 +274,12 @@ export interface AppProps {
   planMetaModel?: Model;
   /**
    * Plan done-gate (M4.1), built by cli/main.ts under MINIMA_TUI_BIG_PLAN.
-   * Registered HERE, after the permission hook, so permission always runs first (first block
-   * wins) — main.ts registers hooks before mount, which would put the gate ahead of it.
+   * Registered HERE, last of the three, so the stack reads permission → checkpoint → gate:
+   * first block wins, so no gate check ever runs for a call the user declines and no snapshot
+   * is taken for one either. (Permission is ahead of both because main.ts put its seam's
+   * delegator on the stack before this tree mounted.)
    */
   bigPlanGateBefore?: BeforeToolCall | null;
-  /**
-   * MP18: the verify-consent seam main.ts wired into the plan hooks. Defaults to the headless
-   * fail-closed checker; this component swaps in the permission-state-backed one on mount
-   * (approvedVerifies — exact command strings the user allowed via the overlay; bypass mode
-   * is the user's blanket consent) and restores the headless checker on unmount.
-   */
-  verifyConsentRef?: { current: VerifyConsent };
   /**
    * The LEAD agent's live todo list (D3a task panel): the same array main.ts handed to
    * todowriteTool, mutated in place by the tool. Re-reads are driven by tool_execution_end
@@ -1015,20 +1012,23 @@ export function ConfigOverlay({ onDismiss }: ConfigOverlayProps) {
 export function HarnessApp({
   agent,
   banner: _banner,
-  askUserRef,
-  childEventRef,
+  frontEnd,
   initialResume = null,
   planSpawn,
   agentTypes,
   planMetaModel,
   bigPlanGateBefore,
-  verifyConsentRef,
   todos,
   fullscreen: fullscreenInitial = false,
   dashboard = null,
   commitDeps = null,
 }: AppProps) {
   const { exit } = useApp();
+  // The five seams this component fills, under the names the call sites below already used.
+  const permissionSeam = frontEnd.permission;
+  const askUserRef = frontEnd.askUser;
+  const childEventRef = frontEnd.childEvents;
+  const verifyConsentRef = frontEnd.verifyConsent;
   // Startup scan; /skills re-runs it so a skill installed mid-session (Skill Seekers and the
   // Claude plugin installers both write into the compat roots while the harness is running)
   // becomes usable without a restart.
@@ -1451,7 +1451,7 @@ export function HarnessApp({
     if (mode !== "plan") return;
     sweepRetiredTools();
     const tool = exitPlanTool({
-      ask: askUserRef ?? { current: null },
+      ask: askUserRef,
       isActive: () => getMode() === "plan",
       requiresPlan: () => planSessionRef.current == null,
       showPlan: (md) => setMessages((m) => [...m, { role: "tool", text: md, toolName: "plan" }]),
@@ -1481,6 +1481,7 @@ export function HarnessApp({
   const [resolveRepoTop] = useState(() => makeRepoResolver(process.cwd()));
   const checkpointArmRef = useToolCallHooks({
     agent,
+    permissionSeam,
     bigPlanGateBefore,
     resolveRepoTop,
     permStateRef,
@@ -1724,7 +1725,7 @@ export function HarnessApp({
   const turnStartRef = useRef(0);
 
   // Subscribe to the agent event stream once (body lifted verbatim into use_agent_events.ts).
-  useAgentEvents(agent, pendingEchoRef, showThinkingRef, {
+  useAgentEvents(agent, frontEnd.agentEvents, pendingEchoRef, showThinkingRef, {
     pushMessage,
     setStreaming,
     setStreamingThoughts,
@@ -2257,7 +2258,7 @@ export function HarnessApp({
             db: agent.db,
             planSessionId: agent.runId,
             eventRunId: agent.runId,
-            consent: (cmd) => verifyConsentRef?.current?.(cmd) ?? false,
+            consent: (cmd) => verifyConsentRef.current(cmd),
           });
           const note = reverifyNotice(rv);
           if (note) {
@@ -4804,9 +4805,9 @@ export function HarnessApp({
           // per-phase `· phase: note` scrollback pushes carried no post-hoc information
           // (fixed strings; the round-summary note below is the durable record).
           onEvent: (e) => setCouncilPhase(e.phase),
-          onChildEvent: childEventRef?.handler ?? undefined,
+          onChildEvent: childEventRef.handler ?? undefined,
         }),
-      askUser: askUserRef?.current ?? null,
+      askUser: askUserRef.current,
       onNote: (note, isError) =>
         setMessages((m) => [...m, { role: "tool", toolName: "council", text: note, isError }]),
       // The base is the planner persona (NOT plannerBaseSystemPromptRef, which holds the
@@ -4845,7 +4846,7 @@ export function HarnessApp({
         ? (o) =>
             runPlanInterview(interviewStateRef.current, {
               enabled: true,
-              askUser: askUserRef?.current ?? null,
+              askUser: askUserRef.current,
               store,
               db: agent.db,
               projectKey:
