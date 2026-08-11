@@ -116,3 +116,48 @@ describe("tui/app.tsx /version command (source pins)", () => {
     expect(src).toContain("minima ${VERSION}");
   });
 });
+
+describe("`minima acp` — the subcommand's argument grammar (MUB-239)", () => {
+  // The acp branch of main() returns before the bootstrap builds anything, so these are safe to
+  // drive directly: no DB, no provider, no stdin. Serving is covered end to end through the ACP
+  // seam (acp-e2e.test.ts); what is pinned here is the entry point's refusals, which is the half
+  // that would otherwise be discovered by a user typing the wrong thing at a stalled process.
+  const stderrOf = async (argv: string[]): Promise<{ code: number; err: string }> => {
+    const { main } = await import("../src/cli/main.ts");
+    const original = process.stderr.write.bind(process.stderr);
+    let err = "";
+    // @ts-expect-error narrow test double for the two write signatures
+    process.stderr.write = (chunk: string) => {
+      err += String(chunk);
+      return true;
+    };
+    try {
+      return { code: await main(argv), err };
+    } finally {
+      process.stderr.write = original;
+    }
+  };
+
+  test("a prompt is refused — the editor sends prompts, the command line does not", async () => {
+    const { code, err } = await stderrOf(["acp", "fix the bug"]);
+    expect(code).toBe(2);
+    expect(err).toContain("takes no prompt");
+  });
+
+  test("combining it with an output mode is refused rather than silently ignored", async () => {
+    expect((await stderrOf(["acp", "--print"])).code).toBe(2);
+    const { code, err } = await stderrOf(["acp", "--mode", "json"]);
+    expect(code).toBe(2);
+    expect(err).toContain("cannot be combined");
+  });
+
+  test("`acp` is a subcommand, not a flag or an output mode", () => {
+    // The rejected alternatives, pinned: a fourth --mode value would have meant "run this one
+    // prompt and render it this way" for something that takes no prompt, and a bare --acp flag
+    // would add a third invocation grammar beside the existing subcommands.
+    expect(() => parseArgs(["--acp"])).toThrow("unknown flag");
+    expect(parseArgs(["acp"]).prompt).toEqual(["acp"]); // a bare positional to parseArgs itself
+    const src = readSource("cli/main.ts");
+    expect(src).toContain('const acp = argv[0] === "acp";');
+  });
+});
