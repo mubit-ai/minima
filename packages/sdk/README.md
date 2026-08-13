@@ -41,6 +41,9 @@ await minima.feedback(rec.recommendation_id, rec.recommended_model.model_id, "su
 });
 ```
 
+Runnable version of the above, straight from a repo checkout (no publish, no install):
+[`examples/quickstart.ts`](examples/quickstart.ts) — `bun run packages/sdk/examples/quickstart.ts`.
+
 Honesty rules baked in: unlabeled outcomes ride as `evidence_source: "none"` (cost
 telemetry — they never touch the success posterior), feedback retries transparently on
 transient faults (the server dedupes), and `recommend` fails fast so your caller can

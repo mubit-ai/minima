@@ -16,6 +16,13 @@ documented inline. Full prose docs live in [`../docs/`](../docs/).
 | 4 | [`04_workflow.py`](04_workflow.py) | Intermediate | Per-step recommendations for a multi-step pipeline + total savings. |
 | 5 | [`05_autocapture.py`](05_autocapture.py) | Intermediate | Zero-code intake via `mubit.learn` (no call-site changes). |
 | 6 | [`06_routed_llm_call.py`](06_routed_llm_call.py) | Advanced | A reusable wrapper that routes a **real** Claude call and feeds the outcome back. |
+| 7 | [`07_observability.py`](07_observability.py) | Advanced | The ops tour: savings, calibration, policy value, memory health, diagnose. |
+| 8 | [`08_optional_routing.py`](08_optional_routing.py) | Advanced | Degrading gracefully — routing is an optimization, never a dependency. |
+| 9 | [`09_ab_savings.py`](09_ab_savings.py) | Advanced | A/B the savings claim: routed vs. pinned premium on realized cost. |
+
+TypeScript users: [`../packages/sdk/examples/quickstart.ts`](../packages/sdk/examples/quickstart.ts)
+is the same core loop with `@mubit-ai/minima-sdk` — run it with
+`bun run packages/sdk/examples/quickstart.ts`.
 
 ## Running
 
