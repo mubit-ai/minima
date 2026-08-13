@@ -15,6 +15,7 @@ set, it simulates the run so the routing + feedback loop is still demonstrated.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import time
 from dataclasses import dataclass
@@ -25,7 +26,13 @@ from minima.schemas.common import Constraints
 
 URL = os.environ.get("MINIMA_URL", "http://localhost:8080")
 KEY = os.environ.get("MINIMA_KEY")
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
+# A key in the environment does not mean the SDK is installed — check both, or a stray
+# ANTHROPIC_API_KEY turns the simulated path into an ImportError.
+ANTHROPIC_KEY = (
+    os.environ.get("ANTHROPIC_API_KEY")
+    if importlib.util.find_spec("anthropic") is not None
+    else None
+)
 
 
 @dataclass
