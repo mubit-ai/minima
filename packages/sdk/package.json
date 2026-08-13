@@ -11,8 +11,8 @@
   "scripts": {
     "test": "bun test",
     "check": "tsc --noEmit",
-    "lint": "biome check src tests",
-    "format": "biome format --write src tests"
+    "lint": "biome check src tests examples",
+    "format": "biome format --write src tests examples"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",

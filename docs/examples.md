@@ -12,8 +12,9 @@ needs.
 
 ## 1. Quickstart with curl — [`01_quickstart.sh`](../examples/01_quickstart.sh)
 
-Exercises every endpoint (`/health`, `/models`, `/recommend`, `/feedback`, `/strategies`)
-with nothing but `curl` and `jq`. The fastest way to confirm a deployment is wired up.
+Exercises the core endpoints (`/health`, `/models`, `/recommend`, `/feedback`,
+`/strategies`) with nothing but `curl` and `jq`. The fastest way to confirm a deployment is
+wired up. For the reporting endpoints, see [example 7](#7-the-ops-tour--07_observabilitypy).
 
 ```bash
 bash examples/01_quickstart.sh
@@ -70,6 +71,54 @@ still demonstrates end to end.
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-... uv run python examples/06_routed_llm_call.py
+```
+
+## 7. The ops tour — [`07_observability.py`](../examples/07_observability.py)
+
+Examples 1–6 all write to Minima; this one only reads. A single pass over every reporting
+endpoint, in the order an operator asks: `capabilities` → `savings` (estimated *and*
+realized) → `calibration` (is `predicted_success` honest?) → `policy-value` (regret vs. an
+oracle) → `memory-health` → `diagnose` (has this error failed before?). On a cold org most
+sections are empty; each says so and moves on rather than crashing on a `None`.
+
+```bash
+uv run python examples/07_observability.py            # MINIMA_REPORT_DAYS=7 by default
+```
+
+## 8. Degrading gracefully — [`08_optional_routing.py`](../examples/08_optional_routing.py)
+
+Routing is an optimization, never a dependency. A `route_or_default()` helper returns your
+hardcoded model when Minima is unreachable, feedback is **skipped** when there is no
+`recommendation_id` to join on, and feedback failures are swallowed rather than raised into
+the hot path. All three arms — healthy, dead port, blown latency budget — run in one pass, so
+the fallback is executed rather than described. Note that connection errors and timeouts
+arrive as `httpx.HTTPError`, not `MinimaError`; catching only the latter leaves a hole.
+
+```bash
+uv run python examples/08_optional_routing.py         # works with the service STOPPED
+```
+
+## 9. A/B the savings claim — [`09_ab_savings.py`](../examples/09_ab_savings.py)
+
+The same task set run twice — routed vs. pinned to one premium model — priced on realized
+tokens from the same catalog, with cost *and* mean quality per arm so a quality regression
+can't hide behind a cost win. The pin is applied as `Constraints(candidate_models=[...])`
+before the request, so arm B is a real decision over a one-model pool; re-ranking Minima's
+answer client-side instead would break propensity logging and poison `/v1/policy-value`.
+
+```bash
+uv run python examples/09_ab_savings.py               # simulated runs, no keys, no spend
+ANTHROPIC_API_KEY=sk-ant-... uv run python examples/09_ab_savings.py
+```
+
+## TypeScript — [`packages/sdk/examples/quickstart.ts`](../packages/sdk/examples/quickstart.ts)
+
+The same core loop as example 2, with [`@mubit-ai/minima-sdk`](sdk-architecture.md). It
+imports from `../src/index.ts`, so it runs straight from a checkout with no publish or
+install step.
+
+```bash
+bun run packages/sdk/examples/quickstart.ts
 ```
 
 ## Where to go next
