@@ -210,7 +210,9 @@ export class MinimaClient {
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         if (v === undefined || v === null) continue;
-        u.searchParams.set(k, String(v));
+        // FastAPI reads a list[str] query param as REPEATED keys; String([a, b]) would
+        // send one comma-joined value, which arrives as a single item of that literal name.
+        for (const item of Array.isArray(v) ? v : [v]) u.searchParams.append(k, String(item));
       }
     }
     return u.toString();
