@@ -24,6 +24,7 @@ Requires the ``seed`` extra (pandas/huggingface-hub) and a running Mubit + MUBIT
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import random
@@ -37,7 +38,7 @@ from typing import Any
 from minima.catalog.store import Catalog, CatalogStore
 from minima.config import Settings
 from minima.memory.adapter import MubitMemory
-from minima.memory.keys import build_content, task_cluster, task_fingerprint
+from minima.memory.keys import build_content, task_fingerprint, versioned_cluster
 from minima.memory.records import OutcomeRecord
 from minima.recommender import score
 from minima.recommender.aggregate import aggregate_by_model
@@ -78,6 +79,30 @@ _MARKET_PRICES: dict[str, tuple[float, float]] = {
 
 _OUT_TOKENS = 256  # assumed completion length for cost estimation
 _NEARDUP_JACCARD = 0.6  # drop eval/test prompts with a train twin at/above this overlap
+
+# The difficulty every eval row is written and queried under. One constant, because the
+# seed write, the recall query and the crosscheck request must agree: a mismatch silently
+# points the read at a different cluster than the write, and the eval then measures a
+# cold-start system while reporting it as a warm one.
+_EVAL_DIFFICULTY = "medium"
+
+
+def _cluster_key(settings: Settings, task_type: TaskType) -> str:
+    """The cluster key the shipped engine would mint for this row (same key-space version)."""
+    return versioned_cluster(
+        task_type.value, _EVAL_DIFFICULTY, settings.minima_cluster_key_version
+    )
+
+
+def _gist(row: Row) -> str:
+    """The text the engine queries recall with — NOT the raw prompt.
+
+    Outcome records are embedded from ``build_content`` at write time, so querying with
+    the bare prompt compares a bare prompt against tagged gists and systematically
+    depresses similarity (see engine._recall_and_lookup). Querying with the raw prompt
+    made the eval measure a thinner evidence set than production ever sees.
+    """
+    return build_content(row.task_type.value, _EVAL_DIFFICULTY, row.prompt)
 
 
 def _provider(model_id: str) -> str:
@@ -162,6 +187,18 @@ class EvalResult:
     frontier: list[SliderResult]
     crosscheck_match_rate: float
     use_train_priors: bool
+    # V5 informativeness: what a constant predictor (always the engine's modal pick) would
+    # have scored, and how many distinct models the engine chose. match_rate <= trivial_rate
+    # means the guard certified nothing — see _crosscheck.
+    crosscheck_trivial_rate: float = 1.0
+    crosscheck_distinct_picks: int = 0
+    # Share of scored rows whose keyed-lookup channel was DOWN (evidence thinner than
+    # production would see). Non-zero invalidates any "evidence starvation" conclusion.
+    lookup_degraded_share: float = 0.0
+    # The deployed stochastic policy at the selected slider, scored on the same rows as
+    # `headline` (which is the deterministic argmin intent). The gap IS exploration cost.
+    headline_deployed: SliderResult | None = None
+    selection_policy: str = "argmin"
 
 
 def prepare_rows(df: Any, candidates: list[str], limit_rows: int,
@@ -259,12 +296,15 @@ def build_catalog(settings: Settings, candidates: list[str], train: list[Row],
 
 
 async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidates: list[str],
-                     provider_for=None, source_dataset: str = "routerbench") -> int:
+                     settings: Settings, provider_for=None,
+                     source_dataset: str = "routerbench") -> int:
     provider_for = _provider if provider_for is None else provider_for
     items: list[dict] = []
     for i, row in enumerate(train):
-        tt, diff = row.task_type.value, "medium"
-        cluster, content = task_cluster(tt, diff), build_content(tt, diff, row.prompt)
+        tt, diff = row.task_type.value, _EVAL_DIFFICULTY
+        # versioned_cluster (not bare task_cluster) so the write lands on the same key the
+        # engine's keyed lookup reads — identical to the production seeder.
+        cluster, content = _cluster_key(settings, row.task_type), build_content(tt, diff, row.prompt)
         for m in candidates:
             q = row.scores[m]
             rec = OutcomeRecord(
@@ -284,21 +324,45 @@ async def seed_train(memory: MubitMemory, lane: str, train: list[Row], candidate
 
 
 async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: list[str],
-                       settings: Settings) -> tuple[dict, int, float]:
-    """Returns (aggregates, n_outcome_evidence, max_neighbor_similarity)."""
+                       settings: Settings) -> tuple[dict, int, float, bool]:
+    """Returns (aggregates, n_outcome_evidence, max_neighbor_similarity, lookup_degraded).
+
+    Mirrors ``engine._recall_and_lookup``: an ANN recall on the CONTENT GIST plus a
+    deterministic keyed lookup for every (cluster, candidate) cell, merged and deduped by
+    entry_id. The lookup is the product's defense against ANN starvation — it returns the
+    per-(cluster, model) record regardless of how many candidates compete for the recall
+    budget — so an eval without it under-measures evidence exactly where the candidate set
+    is widest, and misreads the resulting misroute as a router defect.
+    """
     # Same budget as the engine's own recall (the crosscheck runs Recommender.recommend
     # fresh): a budget asymmetry makes long-prompt rows time out in one path but not the
     # other, and the factored<->engine crosscheck diverges on exactly those rows.
-    recall = await memory.recall(
-        query=row.prompt,
-        lane=lane,
-        limit=settings.minima_memory_recall_limit,
-        timeout_ms=settings.minima_memory_recall_timeout_ms,
+    cluster = _cluster_key(settings, row.task_type)
+    recall, lookup_evidence = await asyncio.gather(
+        memory.recall(
+            query=_gist(row),
+            lane=lane,
+            limit=settings.minima_memory_recall_limit,
+            timeout_ms=settings.minima_memory_recall_timeout_ms,
+        ),
+        memory.lookup(
+            lane=lane,
+            match=[
+                {"kind": "outcome", "task_cluster": cluster, "model_id": mid}
+                for mid in candidates
+            ],
+        ),
     )
+    # None means the keyed channel is DOWN, not empty — the eval must not silently fall
+    # back to recall-only evidence and report it as a full run.
+    lookup_degraded = lookup_evidence is None
+    ann_ids = {ev.entry_id for ev in recall.outcome_evidence}
+    extra = [ev for ev in lookup_evidence or [] if ev.entry_id not in ann_ids]
+    merged = [*recall.outcome_evidence, *extra]
     # Mirror the shipped engine's aggregation knobs (age decay + seed down-weighting),
     # so the factored frontier reflects the same evidence weighting as /recommend.
     aggs = aggregate_by_model(
-        recall.outcome_evidence,
+        merged,
         set(candidates),
         half_life_days=settings.minima_evidence_half_life_days,
         decay_floor=settings.minima_evidence_decay_floor,
@@ -306,15 +370,24 @@ async def _recall_aggs(memory: MubitMemory, lane: str, row: Row, candidates: lis
         seed_crowdout_n=settings.minima_seed_crowdout_n,
     )
     rt = _toks(row.prompt)
-    # Strip the "[task/diff] " prefix build_content adds, then measure overlap with neighbors.
+    # Leakage diagnostic stays on ANN neighbors only: keyed-lookup hits are exact cell
+    # reads with similarity 1.0 by construction, and folding them in would peg the
+    # near-twin fraction at 100% and destroy the V1 signal.
     sims = [_jaccard(rt, _toks(re.sub(r"^\[[^\]]*\]\s*", "", e.content))) for e in recall.outcome_evidence]
-    return aggs, len(recall.outcome_evidence), (max(sims) if sims else 0.0)
+    return aggs, len(merged), (max(sims) if sims else 0.0), lookup_degraded
 
 
 def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
           in_tokens: int, settings: Settings,
-          eval_priors: dict[str, dict[str, float]] | None = None, eval_name: str = "") -> str:
-    """Factored mirror of engine `_score_candidates` + `_optimize` (exploration off).
+          eval_priors: dict[str, dict[str, float]] | None = None, eval_name: str = "",
+          rng: random.Random | None = None) -> str:
+    """Factored mirror of engine `_score_candidates` + `_optimize`.
+
+    Follows the SHIPPING selection policy (``minima_selection_policy``, default
+    "thompson"), not a hardcoded argmin: scoring the deterministic argmin while the
+    product samples a posterior reports a frontier for a policy nobody runs, and hides
+    exploration cost entirely. Pass ``rng=None`` to force the deterministic argmin —
+    that is the policy INTENT, used by the crosscheck so the two sides stay comparable.
 
     ``eval_priors`` (when supplied) overrides the per-task-type prior with a finer
     per-benchmark-family prior — a SIMULATION of a recommender whose capability priors are
@@ -334,8 +407,23 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
         est, _ = score.effective_cost(
             card, agg, in_tokens, _OUT_TOKENS, False, cost_basis, min_cost_n
         )
-        scored.append((mid, pred, conf, est))
+        alpha, beta = score.beta_params(agg, prior, settings.minima_beta_pseudocount)
+        scored.append((mid, pred, conf, est, alpha, beta))
     tau = score.threshold_from_slider(slider, settings.minima_tau_min, settings.minima_tau_max, None)
+
+    thompson = (
+        rng is not None
+        and settings.minima_selection_policy.strip().lower() == "thompson"
+        and len(scored) >= 2
+    )
+    if thompson:
+        assert rng is not None
+        pick_id, _pi = score.thompson_select(
+            [(mid, alpha, beta, est) for mid, _p, _c, est, alpha, beta in scored],
+            tau, rng, settings.minima_thompson_samples,
+        )
+        if pick_id:
+            return pick_id
     eligible = [s for s in scored if s[1] >= tau]
     if eligible:
         return min(eligible, key=lambda s: (s[3], -s[1], -s[2]))[0]
@@ -343,13 +431,17 @@ def _pick(aggs: dict, cards: dict[str, ModelCard], tt: TaskType, slider: float,
 
 
 def _score_picks(rows: list[Row], aggs_list: list[dict], cards, slider, settings,
-                 eval_priors: dict[str, dict[str, float]] | None = None) -> SliderResult:
+                 eval_priors: dict[str, dict[str, float]] | None = None,
+                 seed: int | None = None) -> SliderResult:
+    """Score one slider. ``seed`` set => the deployed stochastic policy, sampled
+    reproducibly; ``seed=None`` => the deterministic argmin intent."""
     n = len(rows)
     acc = cost = 0.0
     picks: dict[str, int] = {}
+    rng = random.Random(seed) if seed is not None else None
     for row, aggs in zip(rows, aggs_list, strict=True):
         m = _pick(aggs, cards, row.task_type, slider, _est_in_tokens(row.prompt), settings,
-                  eval_priors, row.eval_name)
+                  eval_priors, row.eval_name, rng)
         picks[m] = picks.get(m, 0) + 1
         acc += row.scores[m]
         cost += row.costs[m]
@@ -416,13 +508,29 @@ def _baselines(test: list[Row], candidates: list[str], premium: str) -> dict[str
 
 
 async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidates, slider, n):
+    """V5: does the factored scoring match the product endpoint? Returns
+    ``(match_rate, trivial_rate, distinct_picks)``.
+
+    Both sides are pinned to the deterministic argmin policy. Comparing two independent
+    Thompson samples per row would measure RNG divergence, not scoring divergence, and V5
+    exists to catch "we benchmarked a lookalike" — a scoring question.
+
+    ``trivial_rate`` is what a constant predictor (always the engine's modal pick) would
+    score, and ``distinct_picks`` how many models the engine chose at all. When the router
+    does workload-level tier selection it returns ONE model for every row, so any two
+    scoring paths agree 100% by construction and the guard certifies nothing. Reporting
+    the trivial baseline alongside the match rate is what keeps V5 honest: a match rate at
+    or below it is uninformative, however high it looks.
+    """
     from minima.recommender.engine import Recommender
     from minima.recommender.recstore import RecommendationStore
     from minima.schemas.recommend import RecommendRequest
 
     ns = lane.split(":", 1)[1] if ":" in lane else lane
     cards = {c.model_id: c for c in catalog.get().cards}
+    settings = settings.model_copy(update={"minima_selection_policy": "argmin"})
     matches = checked = 0
+    engine_picks: dict[str, int] = {}
     for row, aggs in list(zip(rows, aggs_list, strict=True))[:n]:
         # Fresh engine per call → cold (uniform) propensity, matching the factored path.
         engine = Recommender(settings, memory, catalog, RecommendationStore())
@@ -435,7 +543,7 @@ async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidat
         resp = await engine.recommend(RecommendRequest(
             task=TaskInput(task=row.prompt,
                            task_type=None if in_loop else row.task_type,
-                           difficulty=None if in_loop else "medium",
+                           difficulty=None if in_loop else _EVAL_DIFFICULTY,
                            expected_input_tokens=_est_in_tokens(row.prompt),
                            expected_output_tokens=_OUT_TOKENS),
             namespace=ns, cost_quality_tradeoff=slider,
@@ -446,8 +554,13 @@ async def _crosscheck(settings, memory, catalog, lane, rows, aggs_list, candidat
             max_candidates=len(candidates),
             constraints=Constraints(candidate_models=candidates), allow_llm_escalation=False))
         checked += 1
-        matches += int(resp.recommended_model.model_id == factored)
-    return matches / checked if checked else 1.0
+        engine_pick = resp.recommended_model.model_id
+        engine_picks[engine_pick] = engine_picks.get(engine_pick, 0) + 1
+        matches += int(engine_pick == factored)
+    if not checked:
+        return 1.0, 1.0, 0
+    trivial = max(engine_picks.values()) / checked
+    return matches / checked, trivial, len(engine_picks)
 
 
 async def _barrier(memory: MubitMemory, lane: str, probe: Row, settings: Settings) -> None:
@@ -461,7 +574,7 @@ async def _barrier(memory: MubitMemory, lane: str, probe: Row, settings: Setting
     """
     last, stable = -1, 0
     for _ in range(60):
-        aggs, n, _ = await _recall_aggs(memory, lane, probe, list(probe.scores), settings)
+        aggs, n, _, _degraded = await _recall_aggs(memory, lane, probe, list(probe.scores), settings)
         if n >= settings.minima_memory_recall_limit:
             return
         if n > 0 and n == last:
@@ -546,16 +659,17 @@ async def evaluate(
             for en, md in acc_by.items()
         }
 
-    seeded = await seed_train(memory, lane, train, candidates,
+    seeded = await seed_train(memory, lane, train, candidates, settings,
                               provider_for=provider_for, source_dataset=source_dataset)
     await _barrier(memory, lane, train[0], settings)
 
-    # One recall per val/test prompt; reuse for every slider.
+    # One recall+lookup per val/test prompt; reuse for every slider.
     val_aggs = [(await _recall_aggs(memory, lane, r, candidates, settings))[0] for r in val]
     test_data = [await _recall_aggs(memory, lane, r, candidates, settings) for r in test]
     test_aggs = [d[0] for d in test_data]
     ev_counts = [d[1] for d in test_data]
     sims = [d[2] for d in test_data]
+    lookup_degraded_share = sum(1 for d in test_data if d[3]) / len(test_data) if test_data else 0.0
 
     prem_acc = sum(r.scores[premium] for r in test) / len(test)
     prem_cost = sum(r.costs[premium] for r in test)
@@ -585,9 +699,16 @@ async def evaluate(
     selected = max(beats_random, key=lambda x: x[1])[0] if beats_random else max(
         val_results, key=lambda x: x[2])[0]
 
-    # TEST frontier + headline at the pre-selected slider.
+    # TEST frontier + headline at the pre-selected slider. The frontier and the operating
+    # point stay on the deterministic argmin (V3 needs a stable slider selection, and a
+    # sampled frontier would move under its own RNG). The DEPLOYED stochastic policy is
+    # scored separately at the same slider — the gap between the two is exploration cost,
+    # which a hardcoded-argmin eval reports as zero.
     frontier = [fill(_score_picks(test, test_aggs, cards, s, settings, eval_priors)) for s in sliders]
     headline = fill(_score_picks(test, test_aggs, cards, selected, settings, eval_priors))
+    headline_deployed = fill(
+        _score_picks(test, test_aggs, cards, selected, settings, eval_priors, seed=seed)
+    )
 
     # Per-row arrays for bootstrap + per-task breakdown at the selected slider.
     pc, ps, ppc, pps = [], [], [], []
@@ -627,11 +748,11 @@ async def evaluate(
                  for m in candidates}
     # The eval_name-prior variant intentionally diverges from the shipping engine (which keys
     # priors by task_type), so the factored<->engine crosscheck doesn't apply; -1.0 = N/A.
-    crosscheck = (
+    crosscheck, cc_trivial, cc_distinct = (
         await _crosscheck(settings, memory, catalog, lane, test, test_aggs, candidates,
                           selected, crosscheck_n)
         if prior_grain == "task_type"
-        else -1.0
+        else (-1.0, 1.0, 0)
     )
 
     return EvalResult(
@@ -645,4 +766,7 @@ async def evaluate(
         headline_retention_ci=ret_ci, per_task_type=per_task, per_eval_name=per_eval,
         frontier=frontier,
         crosscheck_match_rate=crosscheck, use_train_priors=use_train_priors,
+        crosscheck_trivial_rate=cc_trivial, crosscheck_distinct_picks=cc_distinct,
+        lookup_degraded_share=lookup_degraded_share, headline_deployed=headline_deployed,
+        selection_policy=settings.minima_selection_policy,
     )

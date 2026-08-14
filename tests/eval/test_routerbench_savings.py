@@ -43,8 +43,17 @@ def _report(r: harness.EvalResult) -> None:
     p(f"candidates = {r.candidates}")
     p(f"premium baseline = {r.premium}   train={r.train_n} val={r.val_n} test={r.test_n} "
       f"(dropped {r.test_dropped_neardup} near-dup test rows)")
-    p(f"seeded={r.seeded} records   avg recall evidence/test-prompt={r.avg_recall_evidence:.1f}   "
+    p(f"seeded={r.seeded} records   avg evidence/test-prompt (recall+lookup)={r.avg_recall_evidence:.1f}   "
       f"factored↔endpoint match={r.crosscheck_match_rate:.0%}")
+    # V5 is only as strong as its ability to discriminate: when the router returns one
+    # model for every row, ANY two scoring paths agree and a 100% match certifies nothing.
+    vacuous = r.crosscheck_match_rate >= 0.0 and r.crosscheck_match_rate <= r.crosscheck_trivial_rate
+    p(f"V5 informativeness: engine chose {r.crosscheck_distinct_picks} distinct model(s); "
+      f"a constant predictor would score {r.crosscheck_trivial_rate:.0%}"
+      f"{'   <== VACUOUS: match rate <= trivial baseline' if vacuous else ''}")
+    if r.lookup_degraded_share > 0.0:
+        p(f"!! KEYED LOOKUP DEGRADED on {r.lookup_degraded_share:.0%} of test rows — evidence is "
+          f"THINNER than production; do not read a misroute here as a router defect.")
     p(f"LEAKAGE diagnostic: recalled-neighbor token-overlap p50={r.neighbor_sim_p50:.2f} "
       f"p95={r.neighbor_sim_p95:.2f}  fraction>=0.8 (near-twin)={r.leaky_fraction:.0%}")
     p("-" * 84)
@@ -76,8 +85,15 @@ def _report(r: harness.EvalResult) -> None:
       f"savings={h.savings_vs_premium:.1%} (95% CI [{r.headline_savings_ci[0]:.1%}, {r.headline_savings_ci[1]:.1%}]), "
       f"accuracy retention={h.accuracy_retention:.1%} (95% CI [{r.headline_retention_ci[0]:.1%}, {r.headline_retention_ci[1]:.1%}])")
     p(f"INTELLIGENCE: vs always-cheapest ({cheap.get('model', '?')}): Minima acc {h.accuracy:.3f} "
-      f"vs {cheap['accuracy']:.3f} (+{h.accuracy - cheap['accuracy']:+.3f})  |  vs always-premium "
+      f"vs {cheap['accuracy']:.3f} ({h.accuracy - cheap['accuracy']:+.3f})  |  vs always-premium "
       f"({r.premium}): {h.savings_vs_premium:.1%} cheaper at {h.accuracy_retention:.1%} of its accuracy.")
+    # The headline above is the deterministic argmin INTENT. Users get the deployed policy.
+    if r.headline_deployed is not None:
+        d = r.headline_deployed
+        p(f"DEPLOYED POLICY ({r.selection_policy}) at the same slider: "
+          f"savings={d.savings_vs_premium:.1%} retention={d.accuracy_retention:.1%}  "
+          f"(exploration cost vs argmin intent: {d.accuracy - h.accuracy:+.3f} accuracy, "
+          f"{d.savings_vs_premium - h.savings_vs_premium:+.1%} savings)")
     p("=" * 84)
 
 
