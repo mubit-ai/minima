@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from minima.metrics.calibration import routing_health
-from minima.metrics.ope import regret_report, replay_policy_value
+from minima.metrics.ope import _percentile, regret_report, replay_policy_value
 from minima.recommender.aggregate import aggregate_by_model
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionRecord
 from minima.recommender.resets import CAUSE_SNAPSHOT_CHANGE, ResetRegistry
@@ -123,6 +123,29 @@ class TestEstimatorSuite:
         deployed = next(p for p in report.policies if p.policy == "deployed")
         assert deployed.n == 20
         assert report.estimator_disagreement is True
+
+    def test_percentile_is_nearest_rank(self):
+        # int(q * n) lands one past the rank and returns the maximum for every n <= 20,
+        # which is the whole range where estimator_disagreement first becomes computable.
+        assert _percentile([float(i) for i in range(1, 21)], 0.95) == 19.0
+        assert _percentile([1.0], 0.95) == 1.0
+
+    def test_switch_falls_back_to_the_direct_method_on_an_exploding_weight(self):
+        # 19 routine picks (w ~ 1.1) and one near-zero-propensity pick (w = 20) whose
+        # correction term dominates DR. SWITCH exists to drop exactly that row — with a
+        # threshold pinned to max(w) it can never fire and is arithmetically DR.
+        rows = [
+            _row(f"n{i}", chosen=CHEAP, outcome="failure",
+                 propensities={CHEAP: 0.9, PREMIUM: 0.1})
+            for i in range(19)
+        ] + [
+            _row("rare", chosen=CHEAP, outcome="success",
+                 propensities={CHEAP: 0.05, PREMIUM: 0.95})
+        ]
+        deployed = next(
+            p for p in regret_report(rows).policies if p.policy == "deployed"
+        )
+        assert deployed.estimates["switch"] < deployed.estimates["dr"]
 
     def test_disagreement_needs_min_n(self):
         rows = [

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from minima.metrics.calibration import (
+    _ece,
     calibration_by_task_type,
     cusum_flags,
     routing_health,
@@ -32,6 +33,18 @@ def _reconciled(rec_id, predicted, outcome, *, quality=None, cost=None, task_typ
     rec.realized_cost_usd = update.cost_usd
     rec.feedback_ts = update.ts
     rec.evidence_source = "judge"
+    return rec
+
+
+def _ordered(rec_id, seq, predicted, outcome):
+    """A reconciled row with an explicit position in the feedback stream.
+
+    ``_reconciled`` derives ts from ``hash(rec_id)``, which is fine for order-free
+    metrics but useless for CUSUM — it walks residuals in feedback order.
+    """
+    rec = _reconciled(rec_id, predicted, outcome)
+    rec.ts = 1_700_000_000.0 + seq
+    rec.feedback_ts = rec.ts + 60
     return rec
 
 
@@ -68,6 +81,12 @@ class TestCalibration:
         reports = calibration_by_task_type(rows)
         assert reports[0].n == 0
 
+    def test_degenerate_bin_count_collapses_to_one_bin(self):
+        # n_bins comes straight from a setting; 0 must not be a 500 on /v1/calibration.
+        ece, bins = _ece([(0.9, 1.0), (0.1, 0.0)], 0)
+        assert [(b.lo, b.hi) for b in bins] == [(0.0, 1.0)]
+        assert ece == pytest.approx(0.0)
+
 
 class TestCusum:
     def test_flags_sustained_overprediction(self):
@@ -83,6 +102,26 @@ class TestCusum:
         rows = []
         for i in range(60):
             rows.append(_reconciled(f"c{i}", 0.8, "success" if i % 5 != 0 else "failure"))
+        assert cusum_flags(rows) == []
+
+    def test_flags_a_shift_that_the_series_mean_cancels(self):
+        # A healthy under-predicting run followed by a hard over-predicting drift. The
+        # two halves nearly cancel in the series mean (0.2), so any pre-averaging over
+        # the whole series hides the very shift CUSUM exists to find.
+        rows = [_ordered(f"lo{i}", i, 0.5, "success") for i in range(20)]
+        rows += [_ordered(f"hi{i}", 20 + i, 0.9, "failure") for i in range(20)]
+        flags = cusum_flags(rows)
+        assert [f.direction for f in flags] == ["over_predicting"]
+
+    def test_recovered_drift_stops_flagging(self):
+        # Same drift, then a long calibrated run: the statistic walks back to its floor,
+        # so the flag describes the stream NOW, not an excursion from months ago.
+        rows = [_ordered(f"d{i}", i, 0.9, "failure") for i in range(12)]
+        assert cusum_flags(rows)
+        rows += [
+            _ordered(f"r{i}", 12 + i, 0.8, "success" if i % 5 != 0 else "failure")
+            for i in range(200)
+        ]
         assert cusum_flags(rows) == []
 
 
@@ -104,6 +143,25 @@ class TestRoutingHealth:
 
     def test_empty(self):
         assert routing_health([])["recommendations"] == 0
+
+    def test_empty_branch_reports_the_same_keys_as_the_populated_one(self):
+        # The zero-rows shortcut is a hand-written literal, so it drifts silently on a
+        # rename (it shipped "epsilon_policy_share" for a release after the Thompson cut).
+        populated = set(routing_health([_reconciled("k", 0.8, "success")]))
+        assert set(routing_health([])) <= populated
+
+    def test_unpairable_rows_leave_the_cost_denominator(self):
+        # A row whose chosen model is absent from its own candidate snapshot can never
+        # contribute a numerator; counting it dilutes every routing-optimality share.
+        priced = make_decision("cheap", propensities={"cheap": 0.5, "premium": 0.5})
+        priced.candidates[0].est_cost_usd = 0.001
+        priced.candidates[1].est_cost_usd = 0.05
+        priced.chosen_model_id = "cheap"
+        orphan = make_decision("orphan")
+        orphan.chosen_model_id = "not-a-candidate"
+
+        assert routing_health([priced])["cheapest_model_share"] == 1.0
+        assert routing_health([priced, orphan])["cheapest_model_share"] == 1.0
 
 
 class TestSavings:

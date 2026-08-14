@@ -97,10 +97,8 @@ def _pairs(
 
 
 def _ece(pairs: list[tuple[float, float]], n_bins: int) -> tuple[float, list[ReliabilityBin]]:
-    bins = [
-        ReliabilityBin(lo=i / n_bins, hi=(i + 1) / n_bins)
-        for i in range(max(1, n_bins))
-    ]
+    n_bins = max(1, n_bins)
+    bins = [ReliabilityBin(lo=i / n_bins, hi=(i + 1) / n_bins) for i in range(n_bins)]
     sums_p = [0.0] * len(bins)
     sums_y = [0.0] * len(bins)
     for p, y in pairs:
@@ -191,6 +189,12 @@ def cusum_flags(
     only: acting on a flag (evidence reset / down-weight) is a later-phase policy.
     Defaults are sized for binary residuals (|resid| up to 1): the slack absorbs
     routine misses, the threshold requires a sustained run before flagging.
+
+    The statistic is the TERMINAL s_hi/s_lo, not their all-time peak: a drift that has
+    since recovered walks back down to the max(0, ...) floor and stops flagging, so a
+    flag always describes the stream's current state. Residuals are never pre-averaged
+    over the whole series — a shift partway through cancels against the healthy period
+    preceding it, which is exactly the drift this is here to catch.
     """
     series: dict[tuple[str, str], list[tuple[float, float]]] = {}
     for r in rows:
@@ -207,35 +211,27 @@ def cusum_flags(
     flags: list[CusumFlag] = []
     for (cluster, model_id), points in series.items():
         points.sort(key=lambda tr: tr[0])
-        if not points:
-            continue
-        mean_resid = sum(resid for _, resid in points) / len(points)
-        if abs(mean_resid) <= k:
-            continue
         s_hi = s_lo = 0.0
-        peak_hi = peak_lo = 0.0
         for _, resid in points:
             s_hi = max(0.0, s_hi + resid - k)
             s_lo = max(0.0, s_lo - resid - k)
-            peak_hi = max(peak_hi, s_hi)
-            peak_lo = max(peak_lo, s_lo)
-        if peak_hi > h:
+        if s_hi > h:
             flags.append(
                 CusumFlag(
                     cluster=cluster,
                     model_id=model_id,
                     n=len(points),
-                    statistic=round(peak_hi, 4),
+                    statistic=round(s_hi, 4),
                     direction="over_predicting",
                 )
             )
-        if peak_lo > h:
+        if s_lo > h:
             flags.append(
                 CusumFlag(
                     cluster=cluster,
                     model_id=model_id,
                     n=len(points),
-                    statistic=round(peak_lo, 4),
+                    statistic=round(s_lo, 4),
                     direction="under_predicting",
                 )
             )
@@ -265,7 +261,7 @@ def routing_health(
             "late_feedback_share": 0.0,
             "escalation_rate": 0.0,
             "exploration_share": 0.0,
-            "epsilon_policy_share": 0.0,
+            "thompson_policy_share": 0.0,
             "success_rate": 0.0,
             "top_model_share": 0.0,
             "cheapest_model_share": 0.0,
@@ -324,12 +320,12 @@ def _cost_metrics(rows: list[DecisionRecord]) -> tuple[float, float, float]:
     for r in rows:
         if not r.candidates:
             continue
-        counted += 1
-        costs = [c.est_cost_usd for c in r.candidates]
-        lo, hi = min(costs), max(costs)
         chosen = next((c for c in r.candidates if c.model_id == r.chosen_model_id), None)
         if chosen is None:
             continue
+        counted += 1
+        costs = [c.est_cost_usd for c in r.candidates]
+        lo, hi = min(costs), max(costs)
         if chosen.est_cost_usd >= hi - 1e-12:
             picked_top += 1
         if chosen.est_cost_usd <= lo + 1e-12:
