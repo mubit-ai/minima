@@ -1,9 +1,9 @@
 # Cold-Start Seeding
 
 With no history, Minima can only lean on capability priors and flat cost estimates
-(`decision_basis: "prior"`, a `cold_start` warning), and the cheap-LLM reasoner fires more
-often. Seeding loads a base of `task → model → outcome` records into Mubit so day-one
-recommendations are grounded — and so cost ranking has observations to work with.
+(`decision_basis: "prior"`, a `cold_start` warning). Seeding loads a base of
+`task → model → outcome` records into Mubit so day-one recommendations are grounded, and so
+cost ranking has observations to work with.
 
 ## The CLI: `minima-seed`
 
@@ -14,7 +14,7 @@ uv run minima-seed [--dataset routerbench|synthetic] [--limit N] [--lane LANE]
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--dataset` | `routerbench` | `routerbench` (real benchmark data) or `synthetic` (no download). |
+| `--dataset` | `synthetic` | `routerbench` (real benchmark data) or `synthetic` (no download). |
 | `--limit` | `2000` | Number of source rows to load. |
 | `--lane` | `MINIMA_SEED_LANE` (`minima:default`) | Memory lane to seed into. Seed into the lane your live traffic recalls from. |
 | `--chunk` | `200` | Batch-insert chunk size. |
@@ -75,5 +75,5 @@ Then send `"namespace": "team-payments"` on `/recommend` so recall hits that lan
 Seed records are a cold-start prior, not ground truth for *your* workload. As real
 `POST /v1/feedback` outcomes accumulate, they progressively dominate the aggregates and the
 cost basis climbs from `estimate` to `observed` to `rescaled`. The router converges on your
-tasks, your quality bar, and your realized costs — see
+tasks, your quality bar, and your realized costs. See
 [How it gets better over time](concepts.md#how-it-gets-better-over-time).

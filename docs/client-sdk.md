@@ -1,7 +1,7 @@
 # Python Client SDK
 
-> **Deployment framing:** this page targets a **self-hosted** Minima (`localhost:8080`,
-> schemas imported from the co-installed `minima` package). For the **hosted service**
+> **Deployment framing:** this page targets a self-hosted Minima (`localhost:8080`,
+> schemas imported from the co-installed `minima` package). For the hosted service
 > (`https://api.minima.sh`, Mubit-key auth), see the published version at
 > [docs.minima.sh/sdk/client-sdk](https://docs.minima.sh/sdk/client-sdk).
 
@@ -22,7 +22,7 @@ from minima_client import MinimaClient
 with MinimaClient("http://localhost:8080", api_key=None, timeout=10.0) as minima:
     rec = minima.recommend("Summarize this incident report into 3 bullets.",
                            cost_quality_tradeoff=3)
-    print(rec.recommended_model.model_id, rec.est_cost_breakdown if False else "")
+    print(rec.recommended_model.model_id, rec.recommended_model.est_cost_breakdown)
 ```
 
 - `base_url` — the Minima service URL.
@@ -50,7 +50,6 @@ rec = minima.recommend(
     constraints=None,                  # Constraints | None
     user_id=None,
     namespace=None,
-    allow_llm_escalation=True,
     explain=True,
 )
 ```
@@ -86,9 +85,8 @@ print(wf.total_est_cost_usd, "vs", wf.total_est_cost_if_all_premium)
 ### `feedback(recommendation_id, chosen_model_id, outcome, usage=..., **kwargs)`
 
 Returns a `FeedbackResponse`. `outcome` is `"success" | "partial" | "failure"` (or an
-`OutcomeLabel`). The typed `Usage` parameter is the loop's single biggest accuracy
-lever — report what the provider ACTUALLY billed (never echo Minima's own
-`est_cost_usd` back):
+`OutcomeLabel`). The typed `Usage` parameter is the loop's single biggest accuracy lever.
+Report what the provider actually billed, and never echo Minima's own `est_cost_usd` back:
 
 ```python
 from minima_client import Usage
@@ -104,7 +102,7 @@ minima.feedback(
 ```
 
 Provenance matters: `evidence_source="none"` (or the deprecated `judged=False`) makes
-the outcome cost/latency **telemetry only** — it never teaches the success posterior.
+the outcome cost/latency telemetry only; it never teaches the success posterior.
 An outcome you asserted yourself is `"human"`; a deterministic check that passed is
 `"gate"` (the only origin that may claim verified-in-production). Provider/infra
 faults should carry `error_cause="infra"` so a rate-limit never reads as model
@@ -160,7 +158,7 @@ except MinimaError as exc:
 `minima_client.autocapture` is a thin wrapper over `mubit.learn`. Calling `enable()` pins a
 learn session to the same memory lane Minima recalls from (`minima:<namespace>`) and
 monkeypatches your OpenAI/Anthropic/LiteLLM/Google-GenAI clients, so every LLM call
-auto-ingests its trace — no code changes at the call site. Requires `mubit-sdk`.
+auto-ingests its trace without any change at the call site. Requires `mubit-sdk`.
 
 ```python
 from minima_client import autocapture
@@ -175,10 +173,10 @@ autocapture.feedback(good=True)        # or score in [-1, 1]
 autocapture.disable()                  # restore original client behavior
 ```
 
-**What it does / doesn't do:** it lands traces + lessons in Minima's lane (enriching the
-reasoner's memory block and Mubit's reflection), but it does **not** by itself produce the
-`kind="outcome"` records the deterministic k-NN aggregator scores. To fully close the loop,
-either call `autocapture.feedback(...)` or send a quality score to `POST /v1/feedback`.
+Autocapture lands traces and lessons in Minima's lane, which enriches recall and Mubit's
+reflection, but it does not by itself produce the `kind="outcome"` records the deterministic
+k-NN aggregator scores. To close the loop, either call `autocapture.feedback(...)` or send a
+quality score to `POST /v1/feedback`.
 
 Other helpers: `autocapture.wrap(client)` (enrich one client instead of global patching),
 `autocapture.capture(messages, response)` (manual ingest for raw HTTP / unsupported libs).

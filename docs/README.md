@@ -2,9 +2,9 @@
 
 Minima recommends a cheaper or alternate LLM model for a given task, so LLM-driven
 workflows spend fewer tokens without losing the quality the task actually needs. It is a
-**recommend-only** advice layer backed by [Mubit](https://docs.mubit.ai) memory — it never
-proxies a call, runs a model, rewrites a prompt, or caches, so it adds **zero latency** to
-your real LLM call.
+recommend-only advice layer backed by [Mubit](https://docs.mubit.ai) memory. It never
+proxies a call, runs a model, rewrites a prompt, or caches, so it adds no latency to your
+real LLM call.
 
 ## Start here
 
@@ -27,7 +27,7 @@ your real LLM call.
   known asymmetries between the two.
 - **[Harness Architecture](harness-architecture.md)** — the internal agentic structure of
   the `minima` CLI (`packages/tui`): the turn lifecycle, hook stacks, sub-agent DAG,
-  budget ledger, recovery ladder, plan verification spine (formerly ground-truth), memory ledger, and DB spine.
+  budget ledger, recovery ladder, plan verification spine, memory ledger, and DB spine.
 - **[Feedback-Loop Research](feedback-loop-research.md)** — 2023–2026 literature survey
   (bandits/OPE, label quality, memory/credit assignment) mapped to the implemented loop,
   with a phased improvement roadmap.
@@ -71,5 +71,5 @@ POST /v1/recommend/workflow   recommend a model per step of a workflow
 POST /v1/feedback             report an outcome, close the learning loop
 GET  /v1/models               the current model catalog (cost + capability priors)
 GET  /v1/strategies           rules Mubit has promoted for a namespace (explainability)
-GET  /v1/health               service, Mubit, catalog, and reasoner status
+GET  /v1/health               service, Mubit, classifier, and catalog status
 ```

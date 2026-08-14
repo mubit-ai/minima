@@ -1,4 +1,4 @@
-# SDK Architecture — how the Minima loop is encoded in the clients
+# SDK Architecture: how the Minima loop is encoded in the clients
 
 Minima ships two SDKs that wrap the same `/v1/*` HTTP contract:
 
@@ -13,7 +13,7 @@ internal structure and the loop contract they enforce; for task-oriented usage s
 
 ## One wire contract, three copies
 
-The server's Pydantic models (`src/minima/schemas/*.py`) are the **wire source of truth**.
+The server's Pydantic models (`src/minima/schemas/*.py`) are the wire source of truth.
 Every field lands in three places:
 
 | Copy | Where | Kept honest by |
@@ -40,17 +40,18 @@ to make the four steps of the loop hard to get wrong:
    whole loop), `recommended_model.model_id`, `est_cost_usd`, `predicted_success`, and
    `warnings`. `constraints.candidate_models` scopes the choice; `phase` rides as a
    `phase:<value>` tag; `incumbent_model_id` lets the server price prompt-cache stickiness
-   honestly. **Recommend never retries** — it fails fast so the caller can fail *open*
-   (fall back to a default model rather than block the user's real LLM call).
+   honestly. Recommend never retries: it fails fast so the caller can fail open, falling
+   back to a default model rather than blocking the user's real LLM call.
 2. **Run the model yourself**, measuring what the provider actually billed.
 3. **Judge quality** — your own gate, judge, or human check. Score thresholds:
    `success >= 0.8`, `partial >= 0.4`, else `failure`.
-4. **`feedback(recommendation_id, model_id, outcome, …)`** — carries the **realized**
+4. **`feedback(recommendation_id, model_id, outcome, …)`** — carries the realized
    `input_tokens` / `output_tokens` / `actual_cost_usd` / `latency_ms`. Never echo
    Minima's own `est_cost_usd` back: real usage is what climbs the cost basis
-   `estimate → observed → rescaled`, the single biggest accuracy lever. **Feedback
-   retries transparently** (3 attempts) on transport faults and 502/503/504 — the server
-   dedupes — but 4xx (including 429) surfaces immediately.
+   `estimate → observed → rescaled`, the single biggest accuracy lever. Feedback retries
+   transparently (3 attempts) on transport faults and 502/503/504, because the server
+   dedupes, but 4xx surfaces immediately. The TS client also retries 429, honoring its
+   `retry-after` (capped at 10s); the Python client surfaces 429 immediately.
 
 ### Label honesty (enforced by field design)
 
@@ -67,8 +68,8 @@ origin differently:
 Provider/infra faults should carry `error_cause="infra"` so a rate-limit never reads as
 model quality. Per-step results ride as `FeedbackRequest.step_outcomes[]`
 (`StepOutcome`: `step_id`, `outcome`, optional `signal` in `[-1, 1]`, `rationale`,
-`directive_hint`) — in the harness these are derived exclusively from deterministic/user
-gate verdicts, never from model self-assessment.
+`directive_hint`). In the harness these come exclusively from deterministic or user gate
+verdicts, never from model self-assessment.
 
 ## Endpoint surface (identical in both SDKs)
 
@@ -92,15 +93,17 @@ gate verdicts, never from model self-assessment.
 Five files, no runtime deps:
 
 - **`client.ts`** — `MinimaClient`. Constructor options: `baseUrl` (required),
-  `apiKey` (→ `Authorization: Bearer`), `feedbackRetryDelaysMs` (default `[500, 2000]`,
-  i.e. up to 3 feedback attempts), and an injectable `fetch` for hermetic tests. No
-  global timeout — cancellation is per-call via `signal: AbortSignal`. Every request
-  sends `x-minima-client` and `user-agent: minima-sdk-ts/<VERSION>`.
+  `apiKey` (→ `Authorization: Bearer`), `timeoutMs` (default `60000`, `0` disables),
+  `feedbackRetryDelaysMs` (default `[500, 2000]`, i.e. up to 3 feedback attempts), and an
+  injectable `fetch` for hermetic tests. Every request carries a 60s deadline by default,
+  composed with any caller `signal: AbortSignal`; a caller whose recommend latencies can
+  exceed that must raise `timeoutMs` or set it to `0`. Requests also send `x-minima-client`
+  and `user-agent: minima-sdk-ts/<VERSION>`.
   - `feedback()` is the ergonomic camelCase surface (`Usage{inputTokens, outputTokens,
-    costUsd, latencyMs}` — explicit `0` is a real measurement); it maps to snake_case
-    wire fields and drops undefined.
-  - `feedbackRaw(req)` accepts a full `FeedbackRequest` — the seam for advanced fields
-    like `step_outcomes` (this is what the harness uses).
+    costUsd, latencyMs}`, where an explicit `0` is a real measurement); it maps to
+    snake_case wire fields and drops undefined.
+  - `feedbackRaw(req)` accepts a full `FeedbackRequest`: the seam for advanced fields
+    like `step_outcomes`, and what the harness uses.
 - **`schemas.ts`** — the wire mirror: `TaskInput`, `Constraints`, `RecommendRequest/
   Response`, `RankedModel`, `FeedbackRequest/Response`, `StepOutcome`, `WorkflowStep/
   Request/Response`, `SavingsResponse`, `CalibrationResponse`, `PolicyValueResponse`,
@@ -110,9 +113,11 @@ Five files, no runtime deps:
 - **`errors.ts`** — typed error ladder: 429 → `MinimaRateLimited` (carries the parsed
   `retry-after` seconds), 502/503/504 → `MinimaUnavailable`, any other non-2xx →
   `MinimaError`; all carry `status` + raw `body`. The retry loop in `feedbackRaw`
-  retries **only** `MinimaUnavailable` and transport errors.
+  retries `MinimaUnavailable`, `MinimaRateLimited` (honoring its `retry-after`, capped at
+  10s), and transport errors, but never a spent deadline (`TimeoutError`/`AbortError`).
 - **`index.ts`** — the public surface: `MinimaClient`, the three errors, `VERSION`, and
-  `export type *` of the wire types.
+  `export type *` of the wire types, plus the enum consts `TASK_TYPES` / `DIFFICULTIES` /
+  `OUTCOME_LABELS` / `DECISION_BASES` re-exported as values (`export type *` erases them).
 - **`version.ts`** — `VERSION` from `package.json`.
 
 ## Python SDK internals (`client_sdk/minima_client/`)
@@ -142,15 +147,15 @@ Five files, no runtime deps:
   - `openhands_router.py` — `MinimaRouterLLM` routes each completion among
     `llms_for_routing` and fires off-thread telemetry feedback.
 
-Neither client class reads environment variables — explicit `base_url`/`api_key` only.
-The one env-aware entry point is the `minima-route` CLI (`MINIMA_URL`,
+Neither client class reads environment variables; you pass `base_url` and `api_key`
+explicitly. The one env-aware entry point is the `minima-route` CLI (`MINIMA_URL`,
 `MINIMA_API_KEY`/`MUBIT_API_KEY`).
 
 ## Known asymmetries (TS vs Python)
 
 | Area | TypeScript | Python |
 |---|---|---|
-| Timeout | none (per-call `AbortSignal` only) | `timeout=10.0` constructor default |
+| Timeout | `timeoutMs=60000` per-request default (`0` disables), composed with per-call `AbortSignal` | `timeout=10.0` constructor default |
 | `recommend` defaults | `explain`/`max_candidates` unset | `explain=True`, `max_candidates=8` |
 | Async | promise-based (inherently async) | separate `AsyncMinimaClient` |
 | `step_outcomes` | typed `StepOutcome` + `feedbackRaw` seam | untyped `**kwargs` passthrough only |
@@ -159,7 +164,7 @@ The one env-aware entry point is the `minima-route` CLI (`MINIMA_URL`,
 | Feedback retry | fixed delays `[500ms, 2000ms]` | tenacity exponential (0.5s→4s), 3 attempts |
 | User-Agent | `minima-sdk-ts/<v>` | `minima-cli/<v> (python-httpx)` |
 
-A note on `cost_basis`: the estimate → observed → rescaled climb is a server-side concept —
-there is no `cost_basis` wire field. The observable cousins on `RankedModel` are
+A note on `cost_basis`: the estimate → observed → rescaled climb is a server-side concept,
+and there is no `cost_basis` wire field. The observable cousins on `RankedModel` are
 `est_cost_breakdown`, `est_cost_low`/`est_cost_high`, `cost_band_basis`, and
 `latency_basis`.

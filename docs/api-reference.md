@@ -5,7 +5,7 @@ served at `/docs` when the service is running.
 
 ## Authentication
 
-Auth is **pass-through**: the caller's Mubit API key IS the credential. Present it as
+Auth is pass-through: the caller's Mubit API key is the credential. Present it as
 `Authorization: Bearer mbt_…` and Minima uses it directly against the configured Mubit
 endpoint, scoping all state to the org derived from that key. There is no provisioning
 step and no Minima-issued keys. When no `Authorization` header is sent, the server falls
@@ -13,12 +13,13 @@ back to its env-configured `MUBIT_API_KEY` (single-tenant deployments). A bearer
 that is not a well-formed Mubit key (`mbt_…`) returns `401`, as does a missing key when
 the server has none configured. See **[Multi-Tenancy](multi-tenancy.md)**.
 
-`user_id` and `namespace` are **within-org** scoping fields, not auth boundaries. The tenant
+`user_id` and `namespace` are within-org scoping fields, not auth boundaries. The tenant
 boundary is the Mubit key → its Mubit instance.
 
 ## Errors
 
-Errors are returned as `application/problem+json` (RFC 7807-style):
+Errors are returned as `application/problem+json` (RFC 7807-style), with one exception
+noted in the table below:
 
 ```json
 { "type": "about:blank", "title": "No candidate models", "status": 422,
@@ -27,11 +28,12 @@ Errors are returned as `application/problem+json` (RFC 7807-style):
 
 | Status | Title | When |
 |--------|-------|------|
-| `400` | Invalid request | Request body fails validation (`ValueError`). |
+| `400` | Invalid request | A `ValueError` raised while handling the request. |
 | `401` | Unauthorized | No Mubit key (none passed, none configured) or a malformed bearer token (not `mbt_…`). |
 | `422` | No candidate models | Constraints eliminated every catalog model. |
+| `422` | — | Request body fails schema validation. This one is **not** problem+json: it is FastAPI's own `application/json` body, `{"detail": [{"type": …, "loc": […], …}]}`. |
 
-Note that `POST /v1/feedback` does **not** error on an unknown `recommendation_id`; it
+Note that `POST /v1/feedback` does not error on an unknown `recommendation_id`; it
 returns `200` with `accepted: false` and an `unknown_recommendation` warning (so retried or
 cross-org feedback fails safely).
 
@@ -41,7 +43,7 @@ cross-org feedback fails safely).
 
 Recommend a model for a single task.
 
-### Request — `RecommendRequest`
+### Request: `RecommendRequest`
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -50,9 +52,11 @@ Recommend a model for a single task.
 | `constraints` | `Constraints` | `{}` | Hard limits on the candidate set (see below). |
 | `user_id` | string \| null | `null` | Within-org actor label (not a tenant/auth boundary). Scopes recall. |
 | `namespace` | string \| null | `null` | Within-org sub-scope (team/project/env). Maps to lane `minima:<namespace>`. |
+| `incumbent_model_id` | string \| null | `null` | The model currently holding this session's prompt cache. Its estimate-basis input cost is priced partly at the cache-read rate, so stickiness emerges from honest cost accounting rather than a post-hoc override. |
 | `max_candidates` | int `1–64` | `8` | Cap on candidates considered. |
-| `allow_llm_escalation` | bool | `true` | Allow the cheap-LLM reasoner when evidence is thin (no effect if no reasoner configured). |
+| `allow_llm_escalation` | bool | `true` | Emit diagnostic `escalation_suggested:*` warnings when evidence is thin/tied/conflicted; `false` suppresses them. |
 | `explain` | bool | `true` | Include `evidence[]` refs on each ranked model. |
+| `baseline_model_id` | string \| null | `null` | The model you would have used without Minima; powers the `vs declared` baseline in `GET /v1/savings`. |
 
 **`TaskInput`**
 
@@ -61,6 +65,7 @@ Recommend a model for a single task.
 | `task` | string | required | Raw task/prompt text; embedded by Mubit for recall. |
 | `task_type` | enum \| null | `null` | One of `code, summarization, extraction, qa, reasoning, classification, translation, creative, rag, tool_use, other`. Heuristic-classified if omitted. |
 | `difficulty` | enum \| null | `null` | One of `trivial, easy, medium, hard, expert`. Heuristic-classified if omitted. |
+| `task_type_confidence` | float `0–1` \| null | `null` | Your classifier's confidence in the `task_type`/`difficulty` you supplied. Diagnostic only — the override wins regardless. |
 | `expected_input_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `MINIMA_DEFAULT_INPUT_TOKENS`. |
 | `expected_output_tokens` | int ≥ 0 \| null | `null` | Feeds the cost estimate; defaults to `MINIMA_DEFAULT_OUTPUT_TOKENS`. |
 | `tags` | string[] | `[]` | Propagated to Mubit `env_tags` (e.g. `lang:python`) for version-aware recall. |
@@ -72,13 +77,13 @@ Recommend a model for a single task.
 | `allowed_providers` | string[] \| null | Whitelist by provider. |
 | `candidate_models` | string[] \| null | Restrict to these model ids. |
 | `excluded_models` | string[] \| null | Blacklist by model id. |
-| `max_cost_per_call` | float ≥ 0 \| null | USD hard filter on estimated cost. Warns `no_model_within_cost_budget` if it eliminates all. |
+| `max_cost_per_call` | float ≥ 0 \| null | USD hard filter on estimated cost. If it eliminates every candidate the request fails with `422 No candidate models`. |
 | `min_quality` | float `0–1` \| null | Predicted-success floor; raises `τ`. |
 | `require_prompt_caching` | bool | Keep only models that support prompt caching. |
-| `max_latency_ms` | int > 0 \| null | Reserved latency hint. |
+| `max_latency_ms` | int > 0 \| null | Drops candidates whose **observed** latency exceeds this budget (a model without latency evidence is never dropped). Warns `no_model_within_latency_budget` and relaxes if it eliminates all. |
 | `require_context_window` | int > 0 \| null | Keep only models with at least this context window. |
 
-### Response — `RecommendResponse`
+### Response: `RecommendResponse`
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -96,6 +101,10 @@ Recommend a model for a single task.
 | `latency_ms` | int | Minima-side recommendation latency. |
 | `classification_profile` | object \| null | Structured trace of the classifier path: rule checks, feature vector, source, and timings. |
 | `warnings` | string[] | See **Warnings** below. |
+| `selection_policy` | enum | `thompson` (the default posterior-sampling policy) \| `argmin` (deterministic — per-org opt-out, or a single-candidate/capped decision). |
+| `recommended_actions` | string[] | Near-free cost-saving actions to apply (e.g. `enable_prompt_cache`). |
+| `stage_latency_ms` | object | Per-stage latency breakdown in milliseconds (`{stage: ms}`). |
+| `cluster_key_version` | string | Version of the cluster-key space this decision was keyed under (`"v1"`). |
 
 **`RankedModel`**
 
@@ -112,6 +121,12 @@ Recommend a model for a single task.
 | `evidence` | `EvidenceRef[]` | Recalled neighbors that informed this candidate (empty if `explain=false`). |
 | `supports_prompt_caching` | bool | |
 | `context_window` | int | |
+| `est_latency_ms` | float \| null | Observed latency percentile from similar past outcomes; `null` without evidence. |
+| `latency_basis` | string | How `est_latency_ms` was derived (e.g. `observed_p75`); empty without evidence. |
+| `est_cost_low` | float \| null | Low end of the data-grounded predictable cost band ($). |
+| `est_cost_high` | float \| null | High end of the same band. |
+| `cost_band_basis` | string | How the band was derived (e.g. `observed_p25_p75`, `rescaled_p25_p75`); empty without a band. |
+| `success_interval_width` | float `0–1` | Width of the 95% credible interval on `predicted_success` — how thin the evidence is. |
 
 **`EvidenceRef`**
 
@@ -131,15 +146,19 @@ Recommend a model for a single task.
 |---------|---------|
 | `cold_start` | No recalled outcomes; prior-only. |
 | `recall_timeout` | Mubit recall exceeded the timeout; prior-only. |
-| `memory_unavailable` | Recall errored; prior-only. |
+| `memory_unavailable` | Recall errored; prior-only. Replaced by the class-specific label when one is known (`memory_unreachable`, `memory_auth_failed`, `memory_rejected_payload`, `memory_unsupported`, `memory_server_error`, `memory_recall_bug`). |
+| `keyed_lookup_degraded` | The deterministic per-`(cluster, model)` evidence channel is down; the decision rests on ANN recall alone. |
+| `memory_drift:repeated` · `memory_drift:stagnant` | Mubit's drift monitor flagged this lane as looping / on a failure streak. Diagnostic; never a routing input. |
+| `neighbor_classified` | The heuristic classifier was unsure; recalled neighbors decided the task type/difficulty. |
+| `recall_invalidated_skipped:<n>` | `<n>` recalled records were tombstoned and excluded from ranking. |
 | `prices_stale` | Catalog prices older than the staleness window. |
+| `no_model_within_latency_budget` | `max_latency_ms` eliminated every candidate; the latency constraint is relaxed for ranking. |
+| `cold_start_margin_applied` | Prior-only candidates had to clear `τ` plus the cold-start margin to stay eligible. |
 | `no_model_meets_threshold` | No candidate cleared `τ`; recommended the highest-success one. |
-| `no_model_within_cost_budget` | `max_cost_per_call` eliminated all; constraint relaxed for ranking. |
-| `escalation_suggested:<reason>` | Escalation criteria met (`thin_evidence`, `low_confidence`, `tie`, …). |
-| `reasoner_consulted` | The cheap-LLM reasoner was consulted and changed scores. |
-| `reasoner_failed` | The reasoner errored or returned unusable output; deterministic result used. |
-| `reasoner_disabled` | Escalation suggested but no reasoner is configured. |
-| `reasoner_skipped_low_value` | Fast reasoner mode skipped a tie/near-threshold-only escalation. |
+| `thompson_pick` | Posterior sampling picked a candidate other than the deterministic cheapest-clearing-`τ` one (which becomes the fallback). |
+| `explore_budget_capped` | A Thompson deviation was refused because the running exploration share hit `MINIMA_EXPLORE_SHARE_CAP`; the argmin pick stands. |
+| `escalation_suggested:<reason>` | Escalation criteria met (`thin_evidence`, `low_confidence`, `low_recall_confidence`, `tie`, `conflict`). Diagnostic only — your harness owns the cascade. |
+| `escalation_rate_high:<cluster>` | This cluster's realized recovery-deferral rate is above the warn threshold. |
 
 ### Example
 
@@ -162,7 +181,7 @@ curl -s http://localhost:8080/v1/recommend -H 'content-type: application/json' -
 Recommend a model for each step of a multi-step workflow. Each step runs the same engine
 independently and gets its own `recommendation_id` for per-step feedback.
 
-### Request — `WorkflowRequest`
+### Request: `WorkflowRequest`
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -182,7 +201,7 @@ independently and gets its own `recommendation_id` for per-step feedback.
 | `constraints` | `Constraints` \| null | Per-step override, **merged over** the global constraints. |
 | `depends_on` | string[] | Declared dependencies (currently informational; steps are scored independently). |
 
-### Response — `WorkflowResponse`
+### Response: `WorkflowResponse`
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -199,10 +218,10 @@ See [`examples/04_workflow.py`](../examples/04_workflow.py).
 ## `POST /v1/feedback`
 
 Report an outcome and close the learning loop. This both reinforces the memories that drove
-the recommendation **and** records realized cost/token history that powers the observed and
+the recommendation and records realized cost/token history that powers the observed and
 rescaled cost-basis tiers.
 
-### Request — `FeedbackRequest`
+### Request: `FeedbackRequest`
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -218,24 +237,29 @@ rescaled cost-basis tiers.
 | `latency_ms` | int ≥ 0 \| null | `null` | |
 | `iterations` | int ≥ 0 \| null | `null` | Agent-loop turns to resolution. |
 | `chosen_effort` | string \| null | `null` | Reasoning-effort level actually used, if varied. |
+| `parent_rec_id` | string \| null | `null` | `recommendation_id` of the preceding rung in a recovery-ladder chain; lets the server assemble same-task preference pairs. |
+| `escalation_reason` | enum \| null | `null` | Why the parent rung failed (sent alongside `parent_rec_id`): `gate_failed` \| `judge_failed` \| `transient` \| `hard_error`. |
+| `provider_model_snapshot` | string \| null | `null` | Exact model id the provider reported serving (e.g. a dated snapshot) — the key for version-churn posterior resets. |
+| `label_propensity` | float `0<x≤1` \| null | `null` | Probability this turn was selected for labeling (`1.0` for gate labels). Keeps OPE/calibration unbiased under sampled judging. |
+| `signals` | object \| null | `null` | Implicit-signal map, `{key: bool}`, max 16 keys matching `^[a-z_]{1,32}$` (a violation is a validation error). Absent key = not observed, never `false`. Consumed only by the opt-in weak-supervision label model. |
 | `step_outcomes` | `StepOutcome[]` | `[]` | Per-step verdicts for multi-step work (cap 32/call): `{step_id, step_name?, outcome, signal? [-1,1], rationale?, directive_hint?}`. |
 | `verified_in_production` | bool | `false` | DEPRECATED — send `evidence_source="gate"` instead. |
 | `judged` | bool \| null | `null` | DEPRECATED — send `evidence_source` instead. |
 | `notes` | string \| null | `null` | |
 | `idempotency_key` | string \| null | `null` | Dedupe key; derived from `recommendation_id + model` if omitted. |
 
-### Response — `FeedbackResponse`
+### Response: `FeedbackResponse`
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `accepted` | bool | `false` with an `unknown_recommendation`/`memory_write_failed` warning on failure. |
+| `accepted` | bool | `false` with an `unknown_recommendation` warning, or with the class-specific memory-write warning (`memory_auth_failed`, `memory_unreachable`, …) when the outcome write fails. |
 | `record_id` | string \| null | The Mubit id of the upserted outcome record. |
 | `reinforced_entry_ids` | string[] | The neighbor entry ids credited. |
 | `updated_confidence` | float \| null | Mubit's updated `knowledge_confidence` for the primary entry. |
 | `reflection_triggered` | bool | Whether reflection fired this call. |
 | `lesson_promoted` | bool | Whether a durable lesson was promoted. |
 | `step_outcomes_recorded` | int | How many `step_outcomes` were relayed to memory. |
-| `warnings` | string[] | `unknown_recommendation`, `memory_write_failed`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`, `step_outcomes_capped:<n>`, `step_outcomes_partial`. |
+| `warnings` | string[] | `unknown_recommendation`, `unlabeled_telemetry_only`, `infra_failure_telemetry_only`, `decision_corrected`, `duplicate_feedback_ignored`, `reinforcement_failed`, `lesson_promotion_failed`, `quality_outcome_mismatch`, `late_feedback_no_attribution`, `step_outcomes_capped:<n>`, `step_outcomes_partial`, and the class-specific memory-write labels `memory_auth_failed`, `memory_rejected_payload`, `memory_unsupported`, `memory_server_error`, `memory_unreachable`, `memory_write_bug`. |
 
 ### Example
 
@@ -265,7 +289,7 @@ The current model catalog (cost + capability priors).
 | `max_cost` | float | — | Keep only models whose max(input, output) $/Mtok ≤ this. |
 | `include_stale` | bool | `true` | If false, prefer fresh-priced models (never returns empty solely due to staleness). |
 
-### Response — `ModelsResponse`
+### Response: `ModelsResponse`
 
 `{ models: ModelCard[], catalog_version, refreshed_at, stale }`, sorted by input price.
 
@@ -293,8 +317,8 @@ The current model catalog (cost + capability priors).
 
 ## `GET /v1/strategies`
 
-Surfaces the rules Mubit has promoted for a namespace — the "why" behind routing patterns.
-(Requires a resolved tenant — pass your Mubit key, or rely on the server's configured one.)
+Surfaces the rules Mubit has promoted for a namespace: the "why" behind routing patterns.
+(Requires a resolved tenant, so pass your Mubit key or rely on the server's configured one.)
 
 ### Query parameters
 
@@ -304,11 +328,13 @@ Surfaces the rules Mubit has promoted for a namespace — the "why" behind routi
 | `lesson_types` | string[] | — | Filter by lesson type. |
 | `max_strategies` | int `1–50` | `5` | |
 
-### Response — `StrategiesResponse`
+### Response: `StrategiesResponse`
 
-`{ namespace, lane, strategies: Strategy[], count }`, where each `Strategy` has
+`{ namespace, lane, strategies: Strategy[], count, warnings[] }`, where each `Strategy` has
 `strategy_id, description, supporting_lesson_count, avg_confidence, avg_reinforcement,
-dominant_lesson_type, dominant_scope, lesson_ids[]`.
+dominant_lesson_type, dominant_scope, lesson_ids[]`. A Mubit outage degrades to `200` with
+an empty `strategies` list and a `memory_unavailable` warning, so check `warnings[]` before
+reading an empty list as "no strategies".
 
 ---
 
@@ -330,12 +356,12 @@ Feature handshake (no auth): `{ plan, workflow, api_version, honored_constraints
 
 ## `POST /v1/diagnose`
 
-Failure lessons matching an error — "here's how this failed before". The harness recovery
+Failure lessons matching an error: "here's how this failed before". The harness recovery
 ladder calls this at a verified failure so the retry is briefed by memory. Degrades like
 the recommend hot path (a Mubit outage returns an empty list + `memory_unavailable`, never
 a 500).
 
-### Request — `DiagnoseRequest`
+### Request: `DiagnoseRequest`
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -345,7 +371,7 @@ a 500).
 | `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
 | `user_id` | string | — | |
 
-### Response — `DiagnoseResponse`
+### Response: `DiagnoseResponse`
 
 `{ namespace, lane, failure_lessons: FailureLesson[], summary, total_failure_lessons,
 warnings[] }`, where each `FailureLesson` has `lesson_id, content, lesson_type,
@@ -365,10 +391,13 @@ counts, promotion candidates. Same graceful degradation as `/v1/diagnose`.
 | `namespace` | string | — | Resolves to lane `minima:<namespace>`. |
 | `stale_threshold_days` | int `1–365` | `30` | |
 
-### Response — `MemoryHealthResponse`
+### Response: `MemoryHealthResponse`
 
 `{ namespace, lane, entry_counts: {type: count}, stale_entries, contradictions,
-low_confidence_count, promotion_candidates, section_health, warnings[] }`.
+low_confidence_count, promotion_candidates, section_health,
+posterior_resets: PosteriorReset[], warnings[] }`, where each `PosteriorReset`
+(an active reset epoch; evidence older than it is zero-weighted at ranking time) has
+`{model, lane, cluster, at, cause}`.
 
 ---
 
@@ -381,11 +410,11 @@ org's Mubit reachability).
 ```json
 {
   "status": "ok",
-  "mubit": {"reachable": true, "transport": "http", "latency_ms": 12,
+  "mubit": {"reachable": true, "transport": "http", "status_code": 200,
             "endpoint": "http://127.0.0.1:3000", "org_id": "default"},
   "auth": "passthrough",
+  "classifier": {"id": "regex-v1", "embed_loaded": false, "required": false},
   "catalog": {"version": "…", "cost_source": "litellm+openrouter", "stale": false, "models": 42},
-  "reasoner": {"provider": "none", "configured": false},
   "version": "0.1.0"
 }
 ```

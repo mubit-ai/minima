@@ -1,8 +1,8 @@
-# Ground-Truth — Builder's Guide
+# Ground-Truth: Builder's Guide
 
-**A hands-on, build-it-yourself ladder.** This is the _companion_ to `ground-truth-tui-plan.md`. That doc explains the architecture and the "why". This doc is the "how": ~25 tiny mini-projects, in order, each one small enough to finish in one sitting, each ending with **something you can run and see**. You learn the system by building it, one observable slice at a time.
+A hands-on, build-it-yourself ladder. The architecture and the "why" live in `docs/harness-architecture.md` and CLAUDE.md's plan-verification-spine section. This doc is the "how": ~25 tiny mini-projects, in order, each one small enough to finish in one sitting, each ending with something you can run and see. You learn the system by building it, one observable slice at a time.
 
-> **Golden rule of this guide:** every mini-project (MP) leaves the app fully working. Everything new lives behind the `MINIMA_TUI_GROUND_TRUTH` flag (off by default), so `main` stays shippable. If you stop after any MP, you still have a real, working feature. Each MP is one PR that keeps `bun test` green.
+> **Golden rule of this guide:** every mini-project (MP) leaves the app fully working. Everything new lives behind the `MINIMA_TUI_BIG_PLAN` flag (ON by default; opt out with `MINIMA_TUI_BIG_PLAN=0`), so `main` stays shippable. If you stop after any MP, you still have a real, working feature. Each MP is one PR that keeps `bun test` green.
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## 2. The one-paragraph mental model
 
-You are building a system where **the agent writes a plan, does the work, and the harness _checks_ each step actually happened before letting the agent move on** — and every check result is written to one small database (the "ledger") that two readers consume: the **screen** (so you can watch) and **Minima** (so it learns which model actually succeeded). "Checking" means: run the step's test, and only believe it if the test went from **failing → passing** (red→green) _because of this step's code_ (not because the agent quietly wrote a fake test). The confidence of each check (🟢/🟡/🔴) decides whether the agent glides on silently, glides on with a flag, or stops and asks you.
+You are building a system where the agent writes a plan, does the work, and the harness _checks_ each step actually happened before letting the agent move on. Every check result is written to one small database (the "ledger") that two readers consume: the screen (so you can watch) and Minima (so it learns which model actually succeeded). "Checking" means: run the step's test, and only believe it if the test went from failing to passing (red→green) _because of this step's code_ (not because the agent quietly wrote a fake test). The confidence of each check (🟢/🟡/🔴) decides whether the agent glides on silently, glides on with a flag, or stops and asks you.
 
 ```
         ┌──────────────────────────────────────────────┐
@@ -75,7 +75,7 @@ Stage 7  feedback loop        ─────►  Minima learns from grounded ou
 Stage 8  /why + demo          ─────►  you can watch and replay the whole thing
 ```
 
-Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiable** one. Stage 6 makes it **quiet**. Stage 7 makes it **learn**. Stage 8 makes it **inspectable**.
+Stages 0–2 give you a watchable system and Stages 3–5 a verifiable one; Stage 6 makes it quiet, Stage 7 makes it learn, and Stage 8 makes it inspectable.
 
 ---
 
@@ -85,89 +85,89 @@ Stages 0–2 give you a **watchable** system. Stages 3–5 give you a **verifiab
 
 | Stage | MP                              | State | Note                                                                         |
 | ----- | ------------------------------- | ----- | ---------------------------------------------------------------------------- |
-| 0     | M0.1 flag + `/gt`               | ✅    | `MINIMA_TUI_GROUND_TRUTH` + command                                          |
+| 0     | M0.1 flag + `/bp`               | ✅    | `MINIMA_TUI_BIG_PLAN` + command                                              |
 | 0     | M0.2 `plans`                    | ✅    | table + `insertPlan`                                                         |
-| 0     | M0.3 `plan_steps` + `/gt-seed`  | ✅    | table + `insertStep` + seed command                                          |
+| 0     | M0.3 `plan_steps` + `/bp-seed`  | ✅    | table + `insertStep` + seed command                                          |
 | 1     | M1.1 persist `todowrite`        | ✅    | `upsertPlanFromTodos` + afterToolCall sink                                   |
 | 1     | M1.2 project plan each turn     | ✅    | `formatPlanProjection` / `planProjectionFor`                                 |
-| 1     | M1.3 `step X/N` footer          | ✅    | `planStripInfo` / `planStripLabel`                                           |
+| 1     | M1.3 `step X/N` footer          | ✅    | `planStripInfo` → `PlanStripInfo.stepPos`/`stepTotal`                        |
 | 2     | M2.1 `file_changes`             | ✅    | table + `insertFileChange`                                                   |
 | 2     | M2.2 record every write         | ✅    | sink attributes each path to the in-progress step                            |
-| 2     | M2.3 DRIFT footer               | ✅    | `isPathClaimed` + `countOffPlanChanges` + `planStripDrift`                   |
+| 2     | M2.3 DRIFT footer               | ✅    | `isPathClaimed` + `countOffPlanChanges` → `PlanStripInfo.drift`              |
 | 3     | M3.1 step carries `verify`      | ✅    | todowrite schema + `parseTodos` carry `verify` (sticky: overwrite, never clear) |
 | 3     | M3.2 `runCheck(cmd)`            | ✅    | `src/minima/check.ts` — never throws, capped output, abortable, kill-hard    |
 | 3     | M3.3 capture baseline           | ✅    | sink captures red/green/unrunnable on in_progress entry, once-only, budgeted |
 | 4     | M4.1 block `done` on fail       | ✅    | gate in the beforeToolCall stack; whole-call reject; one todowrite/batch; attempt rows |
 | 4     | M4.2 require red→green          | ✅    | `redToGreen` in factors_json (baseline red + post-work pass)                 |
 | 4     | M4.3 `gates` row                | ✅    | verified/unchecked rows on every allowed flip; failed/unrunnable on blocks   |
-| 5     | M5.1 provenance                 | ✅    | `classifyCheckOrigin` in `src/minima/gt_factors.ts`; agent_new vs pre_existing from file_changes |
+| 5     | M5.1 provenance                 | ✅    | `classifyCheckOrigin` in `src/minima/big_plan_factors.ts`; agent_new vs pre_existing from file_changes |
 | 5     | M5.2 coverage touch             | ✅    | `computeCoverageHit` (static grep test→changed source); true/false/unknown  |
 | 5     | M5.3 tamper                     | ✅    | `detectTamper` (deleted/skip/xfail on touched test files); conservative markers |
 | 6     | M6.1 confidence fn              | ✅    | pure `confidence(Factors)` rule ladder + exhaustive tests                    |
 | 6     | M6.2 tier → behavior            | ✅    | `behavior.ts` (tier→UI) + `ledgerBehavior` footer note/block + PTY proof     |
 | 6     | M6.3 log overrides              | ✅    | `getUserSignals` reader + inline `a/r/s`→`recordUserSignal` at the 🔴 block; `ledgerBehavior` suppresses answered gates; PTY+DB proof |
-| 7     | M7.1 grounded outcome → routing | ✅    | `stampGroundedOutcome` wired into `runtime.persistDecision`; `/gt-seed` writes+stamps a routing row; PTY+DB proof |
-| 7     | M7.2 feedback path              | ✅    | `groundedOutcomeFor` seam; deterministic gate → outcome label + `verified_in_production` (green-tier only), no fabricated quality, judge skipped; `tests/feedback-grounded.test.ts` |
+| 7     | M7.1 grounded outcome → routing | ✅    | `stampVerifiedOutcome` wired into `runtime.persistDecision`; `/bp-seed` writes+stamps a routing row; PTY+DB proof |
+| 7     | M7.2 feedback path              | ✅    | `verifiedOutcomeFor` seam; deterministic gate → outcome label + `verified_in_production` (green-tier only), no fabricated quality, judge skipped; `tests/feedback-verified.test.ts` |
 | 7     | M7.3 recovery ladder            | ✅    | grounded 🔴 (`failed`/`unrunnable`) is a 3rd escalation trigger in `promptRouted`; reuses exclude+re-route; failure@A + success@B; `tests/ladder.test.ts` |
 | 8     | M8.1 `/why`                     | ✅    | ledger-backed command + seeded PTY proof; ready for live gate rows           |
-| 8     | M8.2 E2E demo                   | ✅    | `tests/gt-e2e.test.ts` — test 1: seeded 🟢🟡🔴+drift footer snapshot + DB dump; test 2: the **live-gate join** — the route→run→feedback→escalation loop drives the real todowrite hooks (plan, red baseline, blocked attempt, red→green verified row; no seeded gates) and stamps grounded outcomes |
+| 8     | M8.2 E2E demo                   | ✅    | `tests/big-plan-e2e.test.ts` — test 1: seeded 🟢🟡🔴+drift footer snapshot + DB dump; test 2: the **live-gate join** — the route→run→feedback→escalation loop drives the real todowrite hooks (plan, red baseline, blocked attempt, red→green verified row; no seeded gates) and stamps grounded outcomes |
 
-> **The whole DB layer is already built.** All five ground-truth tables and the `routing_decisions.gt_*` columns are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachGroundedOutcome`, `setStepBaseline`, …). The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do **not** edit shipped migration batch strings; if a genuinely new column is needed, append the next version (schema is now at **v8** — `plan_steps.tools`, the A6 per-step tool allowlist).
+> **The whole DB layer is already built.** All five ledger tables and the `routing_decisions.big_plan_*` columns (migration v14; the older `gt_*` columns are vestigial, still read through a `COALESCE` for rows written by pre-rename binaries, never written) are migrated, and every writer/reader the rest of the build needs already lives in `src/db/minima_db.ts` (`insertGate`, `getGates`, `recordUserSignal`, `attachBigPlanOutcome`, `setStepBaseline`, …). The MPs the guide describes as "add table X" (M4.3, M6.3) collapse to "wire the logic that fills the table that's already there." Do not edit shipped migration batch strings; if a genuinely new column is needed, append a new batch after the last one in `MIGRATIONS` (the head is `MIGRATIONS.length`, v25 as of writing; `plan_steps.tools`, the A6 per-step tool allowlist, landed at v8).
 
-### Stage 9 — verifiable-steps planner bridge (shipped)
+### Stage 9: verifiable-steps planner bridge (shipped)
 
-Connects the `/plan` design council to the check engine and fills the reserved contract seams, so the deliberated plan flows into the checkable-step machinery instead of being re-invented ad hoc. **Nudge/advise enforcement** — a step with no `verify` still proceeds as 🟡 `unchecked`; nothing new hard-blocks.
+Connects the `/plan` design council to the check engine and fills the reserved contract seams, so the deliberated plan flows into the checkable-step machinery instead of being re-invented ad hoc. Enforcement is nudge/advise only: a step with no `verify` still proceeds as 🟡 `unchecked`, and nothing new hard-blocks.
 
 | MP     | State | Note                                                                                                     |
 | ------ | ----- | ------------------------------------------------------------------------------------------------------- |
-| S9.1 planner authors `verify:` per step | ✅ | `GroundTruthSynthesis.approach` is now `SynthPlanStep[]` (`{action, verify}`); `GROUND_TRUTH.md` renders a `verify:` sub-line per Implementation-Plan step and a decompose nudge when absent; `sanitizeApproach` tolerates the legacy string shape |
+| S9.1 planner authors `verify:` per step | ✅ | `BigPlanSynthesis.approach` is now `SynthPlanStep[]` (`{action, verify}`); `BigPlan.md` renders a `verify:` sub-line per Implementation-Plan step and a decompose nudge when absent; `sanitizeApproach` tolerates the legacy string shape |
 | S9.2 planner → ledger bridge            | ✅ | `MinimaDb.seedPlanFromSteps` seeds an active plan from the approved steps at `/plan finalize`; `formatPlanProjection` carries them (with verify) into the first execution turn |
 | S9.3 `check_origin='user'` producer     | ✅ | migration v7 `plan_steps.check_origin`; seeded steps that carry a check are stamped `user`; the done-gate prefers a stored origin over `classifyCheckOrigin`, so a user-approved check is not "agent-graded homework" |
 | S9.4 `verify_cwd` writer                | ✅ | the v6 seam gets a writer: sticky through `upsertPlanFromTodos`, surfaced on `CompletionFlip`/`started`, passed to `runCheck({cwd})` at both baseline capture and the done-gate |
 | S9.5 milestone gate                     | ✅ | on plan closure `writeMilestoneGate` emits exactly one `kind='milestone'` rollup of the terminal per-step verdicts (worst tier wins, `verified` only when every step verified, `deterministic` only when all step gates were); rec-scoped and conservative, so it can never inflate a run |
-| S9.6 execution nudge                    | ✅ | strengthened `GROUND_TRUTH_SYSTEM_GUIDANCE` + todowrite description with the decompose-if-unverifiable rule; state-backed projection annotation flags any not-yet-done verify-less step every turn |
+| S9.6 execution nudge                    | ✅ | strengthened `BIG_PLAN_SYSTEM_GUIDANCE` + todowrite description with the decompose-if-unverifiable rule; state-backed projection annotation flags any not-yet-done verify-less step every turn |
 
-### Track A — UX primitives (shipped)
+### Track A: UX primitives (shipped)
 
-Small, independently-shippable UX primitives layered on the verifiable core. Each stays behind `MINIMA_TUI_GROUND_TRUTH` and keeps `bun test`/`tsc` green.
+Small, independently-shippable UX primitives layered on the verifiable core. Each stays behind `MINIMA_TUI_BIG_PLAN` and keeps `bun test`/`tsc` green.
 
 | MP  | State | Note                                                                                                                              |
 | --- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
 | A1 Verify primitive       | ✅ | the planner authors a `verify:` per step (red→green check command); seeded into the ledger and carried into execution            |
-| A2 Stop-gate + block-done | ✅ | run-level complement to the per-step done-gate: `src/minima/stop_gate.ts` hangs off the loop's `shouldStopAfterTurn` seam and **denies the agent ENDING the run** while the active plan has an incomplete step or a completed step whose latest gate `outcome='failed'` (`unrunnable` is never a block). Each denial pushes a firm continuation into `state.followUp` (the loop re-drives the model) and spends a strike; after N strikes (`MINIMA_TUI_STOP_STRIKES`, default **3**, `0`=off) it stops fighting and **asks** — interactive raises the question overlay (keep going / accept as done / freetext steer), headless just ends. Either terminus writes one audit-only `kind='stop'` gate (`outcome='unchecked'`, `confidence='red'`, **`rec_id=NULL`** so it is invisible to the feedback join by construction — never inflates/fails a rung). Composed with the budget stop in `promptRouted`; fresh strike counter per recovery rung. Tests: `tests/stop-gate.test.ts` (unit) + `tests/stop-gate-runtime.test.ts` (live loop). New gate kind `stop` added to `gt_contract.ts`. |
+| A2 Stop-gate + block-done | ✅ | run-level complement to the per-step done-gate: `src/minima/stop_gate.ts` hangs off the loop's `shouldStopAfterTurn` seam and **denies the agent ENDING the run** while the active plan has an incomplete step or a completed step whose latest gate `outcome='failed'` (`unrunnable` is never a block). Each denial pushes a firm continuation into `state.followUp` (the loop re-drives the model) and spends a strike; after N strikes (`MINIMA_TUI_STOP_STRIKES`, default **3**, `0`=off) it stops fighting and **asks** — interactive raises the question overlay (keep going / accept as done / freetext steer), headless just ends. Either terminus writes one audit-only `kind='stop'` gate (`outcome='unchecked'`, `confidence='red'`, **`rec_id=NULL`** so it is invisible to the feedback join by construction — never inflates/fails a rung). Composed with the budget stop in `promptRouted`; fresh strike counter per recovery rung. Tests: `tests/stop-gate.test.ts` (unit) + `tests/stop-gate-runtime.test.ts` (live loop). New gate kind `stop` added to `big_plan_contract.ts`. |
 | A3 Anti-spiral | ✅ | `src/minima/anti_spiral.ts` — a **doom-loop ring buffer** + **soft turn cap**, resolved at the same `shouldStopAfterTurn` seam (composed BEFORE A2, so "stop the spiral" outranks "keep going"). A `DoomLoopRing` (cap `max(16, 2·repeats)`) is fed by a per-rung `afterToolCall` hook recording `(tool, stable-args-hash, failed?)`; failure = `toolCallFailed`, which reads ONLY the uniform `details.error` marker `errorResult` now stamps (tools RETURN failures, so `isError` misses them) — a nonzero shell `exit_code` is deliberately NOT a failure (idempotent probes like `grep -q` exit nonzero normally). `spiralingSignatures` scans the WHOLE window (not just the latest call), so a loop is caught even when each turn ends on a non-failing call. When a signature fails ≥ `MINIMA_TUI_SPIRAL_REPEATS` (default **3**, `0`=off) it injects a digest + "you're looping, change approach" **steer into `state.steering`** (drains every turn, so it lands mid-spiral) once (recorded in a per-sig `nudgedAt` map); if that signature fails AGAIN past its nudge point it stops gracefully — an interleaved success can't reset the escalation. A soft turn cap `MINIMA_TUI_STEP_CAP` (default **30**, `0`=off; the hard `maxTurns` stays 50) injects a wrap-up summary + plan progress, allows one turn, then stops. Both stops write an audit `kind='stop'` gate (`factors.reason='doom_loop'`/`'step_cap'`, `rec_id=NULL`). Known limit: calls rejected before execution (unknown-tool / arg-validation / permission block) don't reach `afterToolCall`, so a spiral of *those* is caught by the step cap, not the ring. Tests: `tests/anti-spiral.test.ts` (unit) + `tests/anti-spiral-runtime.test.ts` (live loop). |
-| A6 Per-step tool allowlist + poka-yoke plan audit | ✅ | Two interlocking guardrails that make a plan **mistake-proof before and during execution**. **(1) Per-step tool allowlist (task permissions):** a plan step may carry a minimal `tools` allowlist (schema **v8** `plan_steps.tools`, JSON `string[]`, NULL/`[]` = unrestricted). Authored by the planning council (a `tools:` line per Implementation-Plan step in `GROUND_TRUTH.md`, from `GROUND_TRUTH_SYSTEM`) OR by the agent via `todowrite` (`"tools":["edit","bash"]`), sticky like `verify` (omit=keep, resend=overwrite, never clear) through `upsertPlanFromTodos`/`seedPlanFromSteps`. `src/minima/tool_permissions.ts` (pure: `KNOWN_TOOLS`, `ALWAYS_ALLOWED`={todowrite,question,read,ls,glob,grep}, `parseStepTools`, `stepAllowlistDecision`) decides; enforcement is folded into `groundTruthHooks.before` — while a step is in progress, any **mutating** tool absent from its non-empty allowlist is **hard-blocked at the dispatcher** (read-only + control tools are always allowed; the block never wedges the run — the agent widens the list with `todowrite`). Fail-open on any ledger error. Gated by `config.toolAllowlist` (`MINIMA_TUI_TOOL_ALLOWLIST`, default on; only consulted when `groundTruth` on — inert on the default path). **(2) Static plan lint / poka-yoke audit:** `src/minima/plan_lint.ts` (pure `lintPlan(steps)→findings`) encodes `docs/characteristics_of_a_good_plan.md` — `empty-plan`/`non-gating-verify` (a `true`/`echo`/`exit 0` fabricated check)/`unknown-tool` (a typo'd allowlist that would wedge runtime) are **blockers**; `no-verify`/`duplicate-verify`/`vague-action` warn; `no-allowlist` is an info nudge. Runs at `/plan finalize` — **blockers refuse finalize unless `/plan finalize --force`** — and on demand via the new `/audit` command over the active ledger plan; warns/infos are advisory (nudge/advise). Blast radius is authoring/dispatch only: no change to feedback or the recovery ladder. Tests: `tests/tool-permissions.test.ts`, `tests/plan-lint.test.ts`, `tests/tools-persistence.test.ts` (seed/upsert stickiness + parseTodos). New `GATED_TOOLS` export; schema v8. |
+| A6 Per-step tool allowlist + poka-yoke plan audit | ✅ | Two interlocking guardrails that make a plan **mistake-proof before and during execution**. **(1) Per-step tool allowlist (task permissions):** a plan step may carry a minimal `tools` allowlist (schema **v8** `plan_steps.tools`, JSON `string[]`, NULL/`[]` = unrestricted). Authored by the planning council (a `tools:` line per Implementation-Plan step in `BigPlan.md`, from `BIG_PLAN_SYSTEM`) OR by the agent via `todowrite` (`"tools":["edit","bash"]`), sticky like `verify` (omit=keep, resend=overwrite, never clear) through `upsertPlanFromTodos`/`seedPlanFromSteps`. `src/minima/tool_permissions.ts` (pure: `KNOWN_TOOLS`, `ALWAYS_ALLOWED`={todowrite,question,read,ls,glob,grep}, `parseStepTools`, `stepAllowlistDecision`) decides; enforcement is folded into `bigPlanHooks.before` — while a step is in progress, any **mutating** tool absent from its non-empty allowlist is **hard-blocked at the dispatcher** (read-only + control tools are always allowed; the block never wedges the run — the agent widens the list with `todowrite`). Fail-open on any ledger error. Gated by `config.toolAllowlist` (`MINIMA_TUI_TOOL_ALLOWLIST`, default on; only consulted when `bigPlan` is on). **(2) Static plan lint / poka-yoke audit:** `src/minima/plan_lint.ts` (pure `lintPlan(steps)→findings`) encodes `docs/characteristics_of_a_good_plan.md` — `empty-plan`/`non-gating-verify` (a `true`/`echo`/`exit 0` fabricated check)/`unknown-tool` (a typo'd allowlist that would wedge runtime) are **blockers**; `no-verify`/`duplicate-verify`/`vague-action` warn; `no-allowlist` is an info nudge. Runs at `/plan finalize` — **blockers refuse finalize unless `/plan finalize --force`** — and on demand via the new `/audit` command over the active ledger plan; warns/infos are advisory (nudge/advise). Blast radius is authoring/dispatch only: no change to feedback or the recovery ladder. Tests: `tests/tool-permissions.test.ts`, `tests/plan-lint.test.ts`, `tests/tools-persistence.test.ts` (seed/upsert stickiness + parseTodos). New `GATED_TOOLS` export; schema v8. |
 | A5 Trust the check (fabrication floor) | ✅ | `src/minima/confidence.ts` — tightens the trust tiering so a **fabricated green** forces 🔴 instead of gliding as 🟡. Provenance + coverage were each already computed (M5.1/M5.2) but each only *capped* the tier at 🟡; A5 adds the one damning **combination** as a hard stop: a test the agent wrote THIS run (`checkOrigin==='agent_new'`) that provably does NOT exercise the changed source (`coverageHit===false`, **not** `'unknown'`) is a passing check that tests nothing about the change → 🔴 `unverified self-test`, joining `tamper` as a red-forcing signal. Surgical by design — each factor **alone** still stays 🟡 (`agent_new` → `self-written test`, `coverage=false` on a pre-existing test → `may not touch changes`), so near-zero interruptions holds; only genuine fabrication stops the line. Placed AFTER the `blind` cap: when writes are unattributable the coverage read is knowably incomplete, so `false` may be a false negative — incomplete evidence degrades to 🟡 (signal lost, never fabricated), never escalates to 🔴. Blast radius is tier-only: the gate `outcome` stays `verified` (the check *did* pass), so the recovery ladder (which triggers on `outcome==='failed'`) does NOT escalate — a stronger model can't fix a fabricated test, asking the user is the right move — while `verified_in_production` (green-tier only) is correctly withheld. Tests: `tests/confidence.test.ts` (floor + every precedence/boundary: tamper/fail outrank it, `unknown` and pre-existing don't trip it, `blind` caps it). |
-| A4 Failure-kind matchers + confidence tiers | ✅ | `src/minima/failure_kind.ts` — makes the recovery ladder (`promptRouted`) failure-aware instead of always-escalate. One `makeFailureMatcher()` per prompt (its gate-fail streak spans rungs) is consulted after each failed rung and returns a `FailureDecision {kind, intervention, tier, reason}`: **TRANSIENT** (429/timeout/5xx/network, matched over the `error_message` text since provider errors surface as `stop_reason='error'`, not a throw) → **backoff** (retry the SAME model, no exclusion, optional `MINIMA_TUI_BACKOFF_MS` pause, and NO feedback sent — a blip must not teach Minima the model is bad); **CAPABILITY** (judge<τ, non-transient error, or a FIRST grounded 🔴) → **escalate** (the classic exclude + re-route); **STRUCTURAL** (a grounded 🔴 that persists past `REPLAN_AFTER_GATE_FAILS=2` rungs — a stronger model didn't help) → **replan** (keep the model, PREPEND a plan-revision steer to the next rung's prompt so it lands turn-1, since `state.steering` only drains post-turn). Each move is graded in the shared 🟢/🟡/🔴 vocabulary (`INTERVENTION_TIER`: backoff/escalate 🟡, replan 🔴). backoff/replan leave an audit-only `kind='recovery'` gate (`rec_id=NULL` → invisible to the feedback join; new `GATE_KINDS` value). A REAL check-fail always OUTRANKS a coincidental transient error on the same rung (a terminal 429 can't mask a red the run already wrote): the grounded verdict is read BEFORE feedback, so `transient` never suppresses on `gateFailed`, and the matcher tests `gateFailed` before its transient branch. Gated by `config.groundTruth && config.failureMatcher` (`MINIMA_TUI_FAILURE_MATCHER`, default on, `0`=classic escalate-only) — inert on the default path. Diagnostics: `ladderEscalations`/`ladderBackoffs`/`ladderReplans`. Tests: `tests/failure-kind.test.ts` (unit) + `tests/failure-kind-runtime.test.ts` (live loop); M7.3's persistent-red ladder test updated to assert escalate-once-then-replan. |
-| A7 Learning loop: GT outcome stamping · deterministic outranks judge · recovery ladder | ✅ | The **Track-A hardening pass over Stage 7's learning loop** (M7.1 stamping / M7.2 deterministic-outranks-judge / M7.3+A4 ladder already shipped the baseline; A7 tightens two seams and pins the missing invariant). **(1) Tier-graded deterministic outcome.** Pure `deterministicOutcomeLabel(grounded, graded)` (`src/minima/ground_truth.ts`, wired into `feedbackSafely`) replaces M7.2's binary `verified→success`: a 🟢 verified pass → `success` (still the only tier that flips `verified_in_production`), a **🟡/🔴-tier-but-outcome-verified** pass → `partial`, a `failed` → `failure`. So Minima learns *weaker positive evidence* (a self-written test, no red→green, coverage-unknown) distinctly from clean ground truth, and the **A5 fabrication-floor** case (tier forced 🔴 while the check outcome stays `verified`) maps to `partial` — never a fabricated `success`, never an overstated `failure` (a stronger model can't fix a fabricated test, so it must not read as recovery-worthy). `quality` stays `null` on the deterministic path (no fabricated grade); the recovery-ladder trigger reads the raw `grounded.outcome` (`failed`), never this label, so grading is **learning-signal-only** and changes nothing about what escalates. Gated by `config.gradedOutcome` (`MINIMA_TUI_GRADED_OUTCOME`, default on; `0` → the M7.2 binary) — only consulted when `groundTruth` on, inert on the default path (the deterministic branch never runs without a gate). **(2) Ladder-exhaustion audit.** When the ladder walks every rung and the last is STILL failing on a routed model (`recoveryRungs>0 && attempt≥recoveryRungs`), `writeExhaustionGate` (`src/minima/failure_kind.ts`) leaves ONE terminal `kind='recovery'` gate (`factors.exhausted=true`, `cause∈{gate_failed,judge_failed,hard_error}`, tier 🔴, **`rec_id=NULL`** → invisible to the feedback join like the backoff/replan rows) instead of a silent `return`, and bumps the new `ladderExhausted` diagnostic — so "recovered on rung 2" is distinguishable from "burned every rung and still red" in `/why`. A disabled ladder (`recoveryRungs=0`) or a clean success never emits it; the audit-gate write is gated by the failure matcher (symmetric with A4's recovery rows). **(3) Pinned invariant.** New `tests/learning-loop.test.ts` closes the map's biggest hole — **deterministic-outranks-judge on a genuine CONTRADICTION** (gate 🟢 but judge would grade 0.3 → success; gate 🔴 but judge would grade 0.9 → failure; judge never consulted), which the whole M7.2 suite only ever proved when the judge *agreed*. Also: the pure grading table, flag-off parity, and `writeExhaustionGate` (row shape + fail-open). Updated: `feedback-grounded.test.ts` (yellow→partial), `ladder.test.ts` (persistent-red now also writes the exhaustion gate; recovered run asserts `ladderExhausted=0`), `gt-e2e.test.ts` (recovered yellow rung → partial). Tests: `tests/learning-loop.test.ts`. |
+| A4 Failure-kind matchers + confidence tiers | ✅ | `src/minima/failure_kind.ts` — makes the recovery ladder (`promptRouted`) failure-aware instead of always-escalate. One `makeFailureMatcher()` per prompt (its gate-fail streak spans rungs) is consulted after each failed rung and returns a `FailureDecision {kind, intervention, tier, reason}`: **TRANSIENT** (429/timeout/5xx/network, matched over the `error_message` text since provider errors surface as `stop_reason='error'`, not a throw) → **backoff** (retry the SAME model, no exclusion, optional `MINIMA_TUI_BACKOFF_MS` pause, and NO feedback sent — a blip must not teach Minima the model is bad); **CAPABILITY** (judge<τ, non-transient error, or a FIRST grounded 🔴) → **escalate** (the classic exclude + re-route); **STRUCTURAL** (a grounded 🔴 that persists past `REPLAN_AFTER_GATE_FAILS=2` rungs — a stronger model didn't help) → **replan** (keep the model, PREPEND a plan-revision steer to the next rung's prompt so it lands turn-1, since `state.steering` only drains post-turn). Each move is graded in the shared 🟢/🟡/🔴 vocabulary (`INTERVENTION_TIER`: backoff/escalate 🟡, replan 🔴). backoff/replan leave an audit-only `kind='recovery'` gate (`rec_id=NULL` → invisible to the feedback join; new `GATE_KINDS` value). A REAL check-fail always OUTRANKS a coincidental transient error on the same rung (a terminal 429 can't mask a red the run already wrote): the grounded verdict is read BEFORE feedback, so `transient` never suppresses on `gateFailed`, and the matcher tests `gateFailed` before its transient branch. Gated by `config.bigPlan && config.failureMatcher` (`MINIMA_TUI_FAILURE_MATCHER`, default on, `0`=classic escalate-only). Diagnostics: `ladderEscalations`/`ladderBackoffs`/`ladderReplans`. Tests: `tests/failure-kind.test.ts` (unit) + `tests/failure-kind-runtime.test.ts` (live loop); M7.3's persistent-red ladder test updated to assert escalate-once-then-replan. |
+| A7 Learning loop: GT outcome stamping · deterministic outranks judge · recovery ladder | ✅ | The **Track-A hardening pass over Stage 7's learning loop** (M7.1 stamping / M7.2 deterministic-outranks-judge / M7.3+A4 ladder already shipped the baseline; A7 tightens two seams and pins the missing invariant). **(1) Tier-graded deterministic outcome.** Pure `deterministicOutcomeLabel(grounded, graded)` (`src/minima/big_plan.ts`, wired into `feedbackSafely`) replaces M7.2's binary `verified→success`: a 🟢 verified pass → `success` (still the only tier that flips `verified_in_production`), a **🟡/🔴-tier-but-outcome-verified** pass → `partial`, a `failed` → `failure`. So Minima learns *weaker positive evidence* (a self-written test, no red→green, coverage-unknown) distinctly from clean ground truth, and the **A5 fabrication-floor** case (tier forced 🔴 while the check outcome stays `verified`) maps to `partial` — never a fabricated `success`, never an overstated `failure` (a stronger model can't fix a fabricated test, so it must not read as recovery-worthy). `quality` stays `null` on the deterministic path (no fabricated grade); the recovery-ladder trigger reads the raw `grounded.outcome` (`failed`), never this label, so grading is **learning-signal-only** and changes nothing about what escalates. Gated by `config.gradedOutcome` (`MINIMA_TUI_GRADED_OUTCOME`, default on; `0` → the M7.2 binary) — only consulted when `bigPlan` is on, inert without a gate (the deterministic branch never runs without a gate). **(2) Ladder-exhaustion audit.** When the ladder walks every rung and the last is STILL failing on a routed model (`recoveryRungs>0 && attempt≥recoveryRungs`), `writeExhaustionGate` (`src/minima/failure_kind.ts`) leaves ONE terminal `kind='recovery'` gate (`factors.exhausted=true`, `cause∈{gate_failed,judge_failed,hard_error}`, tier 🔴, **`rec_id=NULL`** → invisible to the feedback join like the backoff/replan rows) instead of a silent `return`, and bumps the new `ladderExhausted` diagnostic — so "recovered on rung 2" is distinguishable from "burned every rung and still red" in `/why`. A disabled ladder (`recoveryRungs=0`) or a clean success never emits it; the audit-gate write is gated by the failure matcher (symmetric with A4's recovery rows). **(3) Pinned invariant.** New `tests/learning-loop.test.ts` closes the map's biggest hole — **deterministic-outranks-judge on a genuine CONTRADICTION** (gate 🟢 but judge would grade 0.3 → success; gate 🔴 but judge would grade 0.9 → failure; judge never consulted), which the whole M7.2 suite only ever proved when the judge *agreed*. Also: the pure grading table, flag-off parity, and `writeExhaustionGate` (row shape + fail-open). Updated: `feedback-verified.test.ts` (yellow→partial), `ladder.test.ts` (persistent-red now also writes the exhaustion gate; recovered run asserts `ladderExhausted=0`), `big-plan-e2e.test.ts` (recovered yellow rung → partial). Tests: `tests/learning-loop.test.ts`. |
 
-**Next steps — the critical path ("make it trustworthy").** Stages 0–4 shipped: the system is _watchable_ and _verifiable_ (a step cannot reach done unless its `verify` passes; every completion leaves a durable gate row). The payoff now is making those verdicts _trustworthy_ and feeding them back. Do these in order:
+**Next steps: the critical path ("make it trustworthy").** Stages 0–4 shipped: the system is _watchable_ and _verifiable_ (a step cannot reach done unless its `verify` passes; every completion leaves a durable gate row). The payoff now is making those verdicts _trustworthy_ and feeding them back. Do these in order:
 
 1. **M5.1 provenance** — replace the gate's hardcoded `checkOrigin: "agent_new"` with real classification (pre-existing test vs agent-authored this run vs user-supplied at approval) recorded into `factors_json`.
 2. **M5.2 coverage touch** — does the check actually exercise the files the step changed? Fill `coverageHit` from `file_changes` (today always `"unknown"`).
 3. **M5.3 tamper** — detect skipped/deleted/weakened tests during a step and force `tamper: true`.
 4. **M6.1 → M6.2 → M6.3** — the `confidence()` tiering over `Factors`, tier-driven UI/behavior, and capturing user overrides into `user_signals` (table + writer already exist).
-5. **Stage 7** — stamp grounded outcomes onto `routing_decisions` (`attachGroundedOutcome` exists) and carry them into `/v1/feedback`; the attempts signal (failed/unrunnable gate rows per step) is already being recorded.
+5. **Stage 7** — stamp grounded outcomes onto `routing_decisions` (`attachBigPlanOutcome` exists) and carry them into `/v1/feedback`; the attempts signal (failed/unrunnable gate rows per step) is already being recorded.
 
 Everything above reads from the gate rows Stage 4 now writes; no new migrations are expected before Stage 7.
 
 ---
 
-## Stage 0 — Groundwork: a flag, a command, a table
+## Stage 0 · Groundwork: a flag, a command, a table
 
 _By the end of this stage you can turn the feature on and see an empty ledger exist._
 
-### M0.1 — Add the on/off flag and a `/gt` status command · ~2h · needs: nothing
+### M0.1: Add the on/off flag and a `/bp` status command · ~2h · needs: nothing
 
-- **Goal (plain):** a switch to turn the whole feature on, and a command that proves it's on.
-- **Why:** everything else hides behind this flag; you need the plumbing first.
+- **Goal (plain):** a switch that turns the whole feature off, and a command that proves which way it is set.
+- **Why:** everything else hangs off this flag; you need the plumbing first.
 - **Build:**
-  - Read `MINIMA_TUI_GROUND_TRUTH` from env into your config object (near the other `MINIMA_*` flags).
-  - Add a `/gt` entry to the `COMMANDS` list and a branch in `handleCommand` (`packages/tui/.../app.tsx`) that prints `Ground-Truth: ON (flag set)` or `OFF`.
-- **See it work:** `MINIMA_TUI_GROUND_TRUTH=1` run the TUI, type `/gt` → you see `ON`. Run without the flag → `OFF`.
+  - Read `MINIMA_TUI_BIG_PLAN` from env into your config object (near the other `MINIMA_*` flags) — on unless it is set to `0`.
+  - Add a `/bp` entry to the `COMMANDS` list and a branch in `handleCommand` (`packages/tui/.../app.tsx`) that prints `plan verification ON (default)` or `OFF (MINIMA_TUI_BIG_PLAN=0)`.
+- **See it work:** run the TUI, type `/bp` → you see `ON`. Re-run with `MINIMA_TUI_BIG_PLAN=0` → `OFF`.
 - **Done when:** the command reports the flag state correctly both ways.
 
-### M0.2 — Add the `plans` table (schema v3, just one table) · ~3h · needs: M0.1
+### M0.2: Add the `plans` table (schema v3, just one table) · ~3h · needs: M0.1
 
 - **Goal (plain):** create the first ledger table and nothing else.
 - **Why:** teaches you the append-only migration pattern you'll reuse for every table.
@@ -177,23 +177,23 @@ _By the end of this stage you can turn the feature on and see an empty ledger ex
 - **See it work:** launch once (migration runs), then `sqlite3 <db> ".schema plans"` and `PRAGMA user_version;` → you see the table and version `3`.
 - **Done when:** a fresh DB migrates to v3 and an old DB upgrades without data loss.
 
-### M0.3 — Add the `plan_steps` table + a debug insert · ~3h · needs: M0.2
+### M0.3: Add the `plan_steps` table + a debug insert · ~3h · needs: M0.2
 
 - **Goal (plain):** the table that holds the individual steps, plus a way to poke a row in by hand.
 - **Why:** you'll want to insert fake data to test readers before the real writers exist.
 - **Build:**
   - Migration: `plan_steps (id, plan_id, idx, content, status, verify TEXT NULL, created_at)`.
-  - Writer `insertStep(...)`; add a hidden `/gt-seed` command that inserts one plan + two fake steps.
-- **See it work:** run `/gt-seed`, then `sqlite3 <db> "SELECT idx,content,status FROM plan_steps"` → two rows.
-- **Done when:** `/gt-seed` reliably produces one plan and its steps in the DB.
+  - Writer `insertStep(...)`; add a hidden `/bp-seed` command that inserts one plan + two fake steps.
+- **See it work:** run `/bp-seed`, then `sqlite3 <db> "SELECT idx,content,status FROM plan_steps"` → two rows.
+- **Done when:** `/bp-seed` reliably produces one plan and its steps in the DB.
 
 ---
 
-## Stage 1 — Capture and show the plan
+## Stage 1: Capture and show the plan
 
 _By the end of this stage the agent's real plan is saved and visible in the footer._
 
-### M1.1 — Persist `todowrite` into the ledger (write only) · ~4h · needs: M0.3
+### M1.1: Persist `todowrite` into the ledger (write only) · ~4h · needs: M0.3
 
 - **Goal (plain):** when the agent writes its todo list, save it as a plan + steps.
 - **Why:** this is the moment a plan becomes real/durable instead of living only in chat.
@@ -203,7 +203,7 @@ _By the end of this stage the agent's real plan is saved and visible in the foot
 - **See it work:** run any task that produces todos, then query `plan_steps` → the agent's real steps are there with statuses.
 - **Done when:** todos and their status changes appear as rows.
 
-### M1.2 — Project the plan back to the agent each turn · ~3h · needs: M1.1
+### M1.2: Project the plan back to the agent each turn · ~3h · needs: M1.1
 
 - **Goal (plain):** every turn, remind the agent of its own plan and which step is active.
 - **Why:** stops the agent "losing the plot" on long tasks — the core of ground-_truth_.
@@ -212,7 +212,7 @@ _By the end of this stage the agent's real plan is saved and visible in the foot
 - **See it work:** temporarily log the assembled prompt; run a multi-turn task → the plan block is present and the active step advances.
 - **Done when:** the injected block always matches the ledger.
 
-### M1.3 — Show `step X/N` in the footer strip · ~4h · needs: M1.1
+### M1.3: Show `step X/N` in the footer strip · ~4h · needs: M1.1
 
 - **Goal (plain):** put the current step count on screen.
 - **Why:** first time you can _watch_ the plan progress — the payoff of Stage 1.
@@ -223,18 +223,18 @@ _By the end of this stage the agent's real plan is saved and visible in the foot
 
 ---
 
-## Stage 2 — Record what actually changed
+## Stage 2: Record what actually changed
 
 _By the end of this stage every file edit is attributed to a step, and off-plan edits show as DRIFT._
 
-### M2.1 — Add the `file_changes` table · ~2h · needs: M0.3
+### M2.1: Add the `file_changes` table · ~2h · needs: M0.3
 
 - **Goal (plain):** a table to log which files got written and by which step.
 - **Build:** migration `file_changes (id, plan_id, step_id NULL, path, kind, origin TEXT NULL, created_at)`; writer `insertFileChange(...)`.
 - **See it work:** `.schema file_changes` shows the table.
 - **Done when:** migration is clean and idempotent.
 
-### M2.2 — Record every write/edit as a file_change · ~3h · needs: M2.1, M1.1
+### M2.2: Record every write/edit as a file_change · ~3h · needs: M2.1, M1.1
 
 - **Goal (plain):** whenever a write/edit tool runs, log the path against the in-progress step.
 - **Why:** this is the raw material for drift, provenance, and coverage later.
@@ -243,7 +243,7 @@ _By the end of this stage every file edit is attributed to a step, and off-plan 
 - **See it work:** have the agent edit a file, then `SELECT path, step_id, kind FROM file_changes` → the row points at the right step.
 - **Done when:** every agent file write produces exactly one attributed row.
 
-### M2.3 — Detect and show DRIFT · ~4h · needs: M2.2, M1.3
+### M2.3: Detect and show DRIFT · ~4h · needs: M2.2, M1.3
 
 - **Goal (plain):** flag edits to files that no step claimed.
 - **Why:** your at-a-glance "is the agent going rogue?" signal.
@@ -255,11 +255,11 @@ _By the end of this stage every file edit is attributed to a step, and off-plan 
 
 ---
 
-## Stage 3 — The acceptance check (the "verify spec")
+## Stage 3: The acceptance check (the "verify spec")
 
 _By the end of this stage each step carries a check command, and you can run it and capture a baseline._
 
-### M3.1 — Let a step carry a check command · ~3h · needs: M1.1
+### M3.1: Let a step carry a check command · ~3h · needs: M1.1
 
 - **Goal (plain):** store the command that proves a step is done.
 - **Why:** this is decision #1 — the agent _proposes_ the check.
@@ -268,7 +268,7 @@ _By the end of this stage each step carries a check command, and you can run it 
 - **See it work:** run a task; `SELECT idx, verify FROM plan_steps` → each step has a proposed check command.
 - **Done when:** proposed checks round-trip into the DB.
 
-### M3.2 — Build `runCheck(cmd)` (shell out, capture result) · ~4h · needs: nothing (parallel-safe)
+### M3.2: Build `runCheck(cmd)` (shell out, capture result) · ~4h · needs: nothing (parallel-safe)
 
 - **Goal (plain):** a helper that runs a command and tells you pass/fail + output.
 - **Why:** the single primitive everything in Stages 4–6 leans on.
@@ -277,7 +277,7 @@ _By the end of this stage each step carries a check command, and you can run it 
 - **See it work:** unit test: `runCheck("true")` → pass; `runCheck("false")` → fail; a sleeping command → times out cleanly.
 - **Done when:** `bun test` covers pass, fail, and timeout.
 
-### M3.3 — Capture the baseline (expect red) when a step starts · ~3h · needs: M3.1, M3.2
+### M3.3: Capture the baseline (expect red) when a step starts · ~3h · needs: M3.1, M3.2
 
 - **Goal (plain):** when a step becomes in-progress, run its check first and record that it fails.
 - **Why:** the "red" half of red→green — without it you can't prove the step caused anything.
@@ -288,11 +288,11 @@ _By the end of this stage each step carries a check command, and you can run it 
 
 ---
 
-## Stage 4 — Gate "done" on a real red→green
+## Stage 4: Gate "done" on a real red→green
 
 _By the end of this stage the agent literally cannot mark a step done unless its check goes red→green._
 
-### M4.1 — Block `set_status(done)` when the check fails · ~4h · needs: M3.3
+### M4.1: Block `set_status(done)` when the check fails · ~4h · needs: M3.3
 
 - **Goal (plain):** intercept the "mark done" call; if the check fails, refuse.
 - **Why:** this is the enforcement muscle — decision #1's "harness validates".
@@ -301,7 +301,7 @@ _By the end of this stage the agent literally cannot mark a step done unless its
 - **See it work:** make the agent try to finish a step while its test still fails → the tool is rejected and the model sees why.
 - **Done when:** a red step can never reach `done`.
 
-### M4.2 — Require red→green, not just green · ~3h · needs: M4.1
+### M4.2: Require red→green, not just green · ~3h · needs: M4.1
 
 - **Goal (plain):** only accept if the baseline was red _and_ it's now green.
 - **Why:** a check that was already green proves nothing about this step.
@@ -310,7 +310,7 @@ _By the end of this stage the agent literally cannot mark a step done unless its
 - **See it work:** a step whose check was already green → it still finishes, but the recorded flag shows `red_to_green = false`.
 - **Done when:** the flag is correctly set for both cases.
 
-### M4.3 — Add the `gates` table and record the verdict · ~3h · needs: M4.2, M2.1
+### M4.3: Add the `gates` table and record the verdict · ~3h · needs: M4.2, M2.1
 
 - **Goal (plain):** write a durable record of each verification.
 - **Why:** the screen and Minima both read from here.
@@ -322,11 +322,11 @@ _By the end of this stage the agent literally cannot mark a step done unless its
 
 ---
 
-## Stage 5 — Trust the check (provenance, tamper)
+## Stage 5: Trust the check (provenance, tamper)
 
 _By the end of this stage you know whether a passing check is trustworthy._
 
-### M5.1 — Provenance: was the test written this run? · ~4h · needs: M4.3, M2.2
+### M5.1 · Provenance: was the test written this run? · ~4h · needs: M4.3, M2.2
 
 - **Goal (plain):** decide if the check is a pre-existing test or one the agent just wrote.
 - **Why:** an agent that writes its own passing test is grading its own homework.
@@ -336,7 +336,7 @@ _By the end of this stage you know whether a passing check is trustworthy._
 - **See it work:** a step using an old test → `pre_existing`; a step whose test the agent created → `agent_new`.
 - **Done when:** origin is recorded correctly for both.
 
-### M5.2 — Coverage touch (simple heuristic) · ~4h · needs: M5.1
+### M5.2: Coverage touch (simple heuristic) · ~4h · needs: M5.1
 
 - **Goal (plain):** a cheap check that the test actually exercises the changed file.
 - **Why:** stops "green" tests that don't touch the new code.
@@ -346,7 +346,7 @@ _By the end of this stage you know whether a passing check is trustworthy._
 - **See it work:** a test that imports the changed module → `coverage_hit=true`; an unrelated test → `false`.
 - **Done when:** the factor is recorded (perfection not required — it's a signal, not a gate).
 
-### M5.3 — Tamper detection · ~3h · needs: M5.1
+### M5.3: Tamper detection · ~3h · needs: M5.1
 
 - **Goal (plain):** flag when tests were skipped, deleted, or weakened this step.
 - **Why:** the one factor that should _always_ stop the line.
@@ -357,11 +357,11 @@ _By the end of this stage you know whether a passing check is trustworthy._
 
 ---
 
-## Stage 6 — Confidence: 🟢 / 🟡 / 🔴
+## Stage 6 · Confidence: 🟢 / 🟡 / 🔴
 
 _By the end of this stage the system decides on its own when to glide, flag, or stop._
 
-### M6.1 — The confidence rule ladder (pure function) · ~4h · needs: M5.3
+### M6.1: The confidence rule ladder (pure function) · ~4h · needs: M5.3
 
 - **Goal (plain):** turn the factors into one tier, with a clear reason string.
 - **Why:** this is decision #4 (Option A) and #3's tiers — kept explainable.
@@ -378,7 +378,7 @@ _By the end of this stage the system decides on its own when to glide, flag, or 
 - **See it work:** `bun test` with one case per row asserting tier + reason.
 - **Done when:** all rows are covered by unit tests.
 
-### M6.2 — Wire tier → behavior · ~4h · needs: M6.1, M4.3, M1.3
+### M6.2: Wire tier → behavior · ~4h · needs: M6.1, M4.3, M1.3
 
 - **Goal (plain):** make each tier actually do something.
 - **Why:** this is where "near-zero interruptions" becomes real.
@@ -390,7 +390,7 @@ _By the end of this stage the system decides on its own when to glide, flag, or 
 - **See it work:** three snapshots — a 🟢 run (quiet), a 🟡 run (footer note), a 🔴 run (prompt appears).
 - **Done when:** each tier drives the right behavior.
 
-### M6.3 — Log every factor + record your overrides · ~3h · needs: M6.2
+### M6.3: Log every factor + record your overrides · ~3h · needs: M6.2
 
 - **Goal (plain):** save the raw factors and whatever you decide at a 🔴/🟡.
 - **Why:** this is your future training data to tune thresholds (the "iterate and check what works" path).
@@ -401,11 +401,11 @@ _By the end of this stage the system decides on its own when to glide, flag, or 
 
 ---
 
-## Stage 7 — Close the loop to Minima
+## Stage 7: Close the loop to Minima
 
 _By the end of this stage grounded outcomes flow back so Minima learns which model actually succeeded._
 
-### M7.1 — Write the grounded outcome onto the routing record · ~4h · needs: M6.2
+### M7.1: Write the grounded outcome onto the routing record · ~4h · needs: M6.2
 
 - **Goal (plain):** stamp each step's real result onto the routing decision that picked the model.
 - **Why:** turns "the judge guessed 0.7" into "the test passed" — the feedback gap you set out to fix.
@@ -414,7 +414,7 @@ _By the end of this stage grounded outcomes flow back so Minima learns which mod
 - **See it work:** `SELECT model, outcome, verified_by FROM routing_decisions` after a run → grounded outcomes attached to the right model.
 - **Done when:** every verified step updates its routing record.
 
-### M7.2 — Feed it into the existing feedback path (deterministic outranks judge) · ~3h · needs: M7.1
+### M7.2: Feed it into the existing feedback path (deterministic outranks judge) · ~3h · needs: M7.1
 
 - **Goal (plain):** send the grounded result through the same feedback call you already have, and prefer it over the judge.
 - **Why:** this is the reward-signal decision — a real check beats an opinion.
@@ -423,7 +423,7 @@ _By the end of this stage grounded outcomes flow back so Minima learns which mod
 - **See it work:** log/mock the feedback payload → a verified step sends `verified_by=deterministic`, weight ~1.0; an unverifiable step falls back to the judge.
 - **Done when:** deterministic results are the ones that reach Minima when present.
 
-### M7.3 — A failed verification feeds the recovery ladder · ~4h · needs: M7.1
+### M7.3: A failed verification feeds the recovery ladder · ~4h · needs: M7.1
 
 - **Goal (plain):** when a check fails, reuse your existing escalation to try a stronger model.
 - **Why:** you already have this ladder for judge-failures — now feed it a _grounded_ trigger, and log the loss for the model that failed.
@@ -434,11 +434,11 @@ _By the end of this stage grounded outcomes flow back so Minima learns which mod
 
 ---
 
-## Stage 8 — Watch it, replay it
+## Stage 8: Watch it, replay it
 
 _By the end of this stage you can inspect any run and demo the whole thing._
 
-### M8.1 — `/why` shows per-step verification · ~4h · needs: M6.2
+### M8.1: `/why` shows per-step verification · ~4h · needs: M6.2
 
 - **Goal (plain):** a command that lists each step with its check, tier, reason, and any drift.
 - **Why:** your window into _why_ the system did what it did.
@@ -446,7 +446,7 @@ _By the end of this stage you can inspect any run and demo the whole thing._
 - **See it work:** run a mixed task, then `/why` → snapshot shows the per-step verdicts.
 - **Done when:** `/why` reflects the ledger exactly.
 
-### M8.2 — End-to-end demo + acceptance artifact · ~4h · needs: all above
+### M8.2: End-to-end demo + acceptance artifact · ~4h · needs: all above
 
 - **Goal (plain):** one scripted run that exercises 🟢, 🟡, 🔴, drift, and escalation, captured as a snapshot + DB dump.
 - **Why:** proves the spine works end-to-end and becomes your regression test.
@@ -459,7 +459,7 @@ _By the end of this stage you can inspect any run and demo the whole thing._
 
 ## 5. Definition of done for the whole spine
 
-You've built the ground-truth verification & feedback spine when, behind `MINIMA_TUI_GROUND_TRUTH=1`:
+You've built the plan-verification & feedback spine when, with `MINIMA_TUI_BIG_PLAN` on (its default):
 
 1. The agent's plan is **persisted, projected back each turn, and visible** in the footer.
 2. Every file write is **attributed to a step**, and off-plan writes show **DRIFT**.
@@ -473,23 +473,23 @@ You've built the ground-truth verification & feedback spine when, behind `MINIMA
 
 ## 5b. Splitting the remaining build across two engineers
 
-The work left (Stages 3–8) is essentially **one long dependency chain** — M3 → M4 → M5 → M6 → M7 → M8. If you split it by MP _number_, the two engineers just take turns and one always waits on the other. The trick is to split by **seam**: one engineer _produces_ verification facts, the other _consumes_ them, and they meet at a single typed contract — the shape of `gates.factors_json`.
+The work left (Stages 3–8) is essentially one long dependency chain: M3 → M4 → M5 → M6 → M7 → M8. If you split it by MP _number_, the two engineers just take turns and one always waits on the other. The trick is to split by seam: one engineer _produces_ verification facts, the other _consumes_ them, and they meet at a single typed contract, the shape of `gates.factors_json`.
 
-### Step 0 — freeze the contract together (day 1, ~1h) · ✅ Done
+### Step 0: freeze the contract together (day 1, ~1h) · ✅ Done
 
-**Status: implemented.** The contract lives in **`src/minima/gt_contract.ts`** — a pure, dependency-free types module (zero runtime imports) that both tracks and the DB boundary import from, so the enum spellings can never drift apart. Each string enum is declared once as an `as const` tuple with its union _derived_ from it, so the allowed set is frozen at **both** compile time (the union) and runtime (the array) — and is regression-guarded + round-tripped through the DB by `tests/gt-contract.test.ts`.
+**Status: implemented.** The contract lives in `src/minima/big_plan_contract.ts`, a pure, dependency-free types module (zero runtime imports) that both tracks and the DB boundary import from, so the enum spellings can never drift apart. Each string enum is declared once as an `as const` tuple with its union _derived_ from it, so the allowed set is frozen at both compile time (the union) and runtime (the array), and is regression-guarded + round-tripped through the DB by `tests/big-plan-contract.test.ts`.
 
 Exported surface:
 
 ```ts
-// frozen value set (as const)                              → derived union
-GATE_OUTCOMES    = ["verified", "failed", "unrunnable"]     → GateOutcome
-CONFIDENCE_TIERS = ["green", "yellow", "red"]               → ConfidenceTier
-VERIFIED_BY      = ["deterministic", "judge", "user"]       → VerifiedBy
-GATE_KINDS       = ["step_check", "milestone"]              → GateKind
-BASELINES        = ["red", "green", "unrunnable"]           → Baseline      (M3.3)
-USER_ACTIONS     = ["accept", "reject", "steer"]            → UserAction    (M6.3)
-CHECK_ORIGINS    = ["pre_existing", "agent_new", "user"]    → CheckOrigin   (M5.1)
+// frozen value set (as const)                                       → derived union
+GATE_OUTCOMES    = ["verified", "failed", "unrunnable", "unchecked"] → GateOutcome
+CONFIDENCE_TIERS = ["green", "yellow", "red"]                        → ConfidenceTier
+VERIFIED_BY      = ["deterministic", "judge", "user"]                → VerifiedBy
+GATE_KINDS       = ["step_check", "milestone", "stop", "recovery"]   → GateKind
+BASELINES        = ["red", "green", "unrunnable"]                    → Baseline      (M3.3)
+USER_ACTIONS     = ["accept", "reject", "steer"]                     → UserAction    (M6.3)
+CHECK_ORIGINS    = ["pre_existing", "agent_new", "user"]             → CheckOrigin   (M5.1)
 
 interface Factors {           // Track A fills this → gates.factors_json → Track B reads it
   pass: boolean;              // check result                 (M3.2 / M4.1)
@@ -498,34 +498,35 @@ interface Factors {           // Track A fills this → gates.factors_json → T
   checkOrigin: CheckOrigin;   // provenance                   (M5.1)
   coverageHit: boolean | "unknown"; // coverage               (M5.2)
   tamper: boolean;            // tests weakened/deleted        (M5.3)
+  blind?: boolean;            // unattributable writes → 🟡 cap (A5)
 }
 interface ConfidenceVerdict { tier: ConfidenceTier; reason: string }         // confidence() output (M6.1)
 interface CheckResult { pass: boolean; output: string; durationMs: number }  // runCheck() output   (M3.2)
 ```
 
-**Retrofit:** `src/db/minima_db.ts` now consumes these unions at the DB boundary (via `import type`, so no runtime dependency and no import cycle): `GateRow`, `insertGate(...)`, `recordUserSignal(...)`, `attachGroundedOutcome(...)`, `setStepBaseline(...)`, `insertStep(...)`, and `PlanStepRow.baseline` are typed to the frozen enums instead of bare `string`. Plan/step `status` is deliberately left as `string` — it flows through `parseTodos`/`TodoInput` and isn't a verification enum.
+**Retrofit:** `src/db/minima_db.ts` now consumes these unions at the DB boundary (via `import type`, so no runtime dependency and no import cycle): `GateRow`, `insertGate(...)`, `recordUserSignal(...)`, `attachBigPlanOutcome(...)`, `setStepBaseline(...)`, `insertStep(...)`, and `PlanStepRow.baseline` are typed to the frozen enums instead of bare `string`. Plan/step `status` is deliberately left as `string`: it flows through `parseTodos`/`TodoInput` and isn't a verification enum.
 
-> **Decision record.** _Where:_ `src/minima/gt_contract.ts` (new), consumed by `src/db/minima_db.ts`; tests in `tests/gt-contract.test.ts`. _Scope:_ types + a conservative DB-boundary retrofit (verification enums only). _Frozen on:_ branch `feat/plan-sqlite-merge`. _Rules:_ do **not** widen these unions back to `string`; to add a value, extend the `as const` tuple (its union updates automatically) and the matching test. New **columns** → append migration **v6** (never edit v1–v5).
+> **Decision record.** _Where:_ `src/minima/big_plan_contract.ts` (new), consumed by `src/db/minima_db.ts`; tests in `tests/big-plan-contract.test.ts`. _Scope:_ types + a conservative DB-boundary retrofit (verification enums only). _Frozen on:_ branch `feat/plan-sqlite-merge`. _Rules:_ do not widen these unions back to `string`; to add a value, extend the `as const` tuple (its union updates automatically) and the matching test. New columns → append a new batch after the last one in `MIGRATIONS` (never edit a shipped batch).
 
-### Track A — "the check engine" (producer) · the critical path
+### Track A: "the check engine" (producer) · the critical path
 
-Owns everything that **runs checks and computes raw factors**.
+Owns everything that runs checks and computes raw factors.
 
 - **MPs:** M3.1, M3.2, M3.3, M4.1, M4.2, M4.3 → then M5.1, M5.2, M5.3.
-- **Files:** new `src/minima/check.ts` (`runCheck`), the agent loop's `beforeToolCall`/`afterToolCall` seams, `src/minima/ground_truth.ts` (factor computation), and the `minima_db.ts` writers (already there).
+- **Files:** new `src/minima/check.ts` (`runCheck`), the agent loop's `beforeToolCall`/`afterToolCall` seams, `src/minima/big_plan.ts` + `src/minima/big_plan_factors.ts` (factor computation), and the `minima_db.ts` writers (already there).
 - **Deliverable:** every step that finishes (or fails) writes a `gates` row with a **fully-populated `factors_json`** conforming to the contract.
 
-### Track B — "trust, UI & learning" (consumer)
+### Track B: "trust, UI & learning" (consumer)
 
-Owns everything that **reacts to a gate**. Track B already owns the footer/overlay from M1.3/M2.3, so it keeps the UI.
+Owns everything that reacts to a gate. Track B already owns the footer/overlay from M1.3/M2.3, so it keeps the UI.
 
-- **MPs:** M6.1 (confidence fn) and M8.1 (`/why`) can start **on day 1** — build them test-first against the `Factors` type and against `/gt-seed`-style seeded rows, before Track A has produced a single real gate. Then M6.2, M6.3, M7.1 (logic), M7.2, M7.3.
+- **MPs:** M6.1 (confidence fn) and M8.1 (`/why`) can start **on day 1** — build them test-first against the `Factors` type and against `/bp-seed`-style seeded rows, before Track A has produced a single real gate. Then M6.2, M6.3, M7.1 (logic), M7.2, M7.3.
 - **Files:** new `src/minima/confidence.ts` (pure fn), `src/tui/app.tsx` (footer note + 🔴 overlay), `src/minima/runtime.ts` (feedback + recovery, reuse `feedbackSafely`), and the `/why` command.
 - **Deliverable:** given a `factors_json`, the system tiers it 🟢🟡🔴, drives the UI, captures overrides, and feeds Minima + the recovery ladder.
 
 ### Why this parallelizes
 
-Track B's hardest pieces — the confidence rule ladder (M6.1), `/why` (M8.1), and the tier→behavior UI (M6.2) — depend only on the **contract**, not on Track A's internals. B builds and unit-tests them against mocked/seeded factor rows while A is still building the producer. The two tracks only truly converge when A lands **M4.3** (the first real gate rows), at which point B swaps mocks for live data.
+The confidence rule ladder (M6.1), `/why` (M8.1), and the tier→behavior UI (M6.2) are Track B's hardest pieces, and they depend only on the contract, not on Track A's internals. B builds and unit-tests them against mocked/seeded factor rows while A is still building the producer. The two tracks only truly converge when A lands M4.3 (the first real gate rows), at which point B swaps mocks for live data.
 
 ### Sync points
 
@@ -543,13 +544,13 @@ Track B's hardest pieces — the confidence rule ladder (M6.1), `/why` (M8.1), a
 | 4   | help M7.2/M7.3 + hardening (~7h) | M7.2 + M7.3 + M8.1 finish (~8h)            | learning loop closed                                          |
 | 4   | **M8.2 demo together (~4h)**     |                                            | demo pinned as regression                                     |
 
-≈60–70h of build (the guide's summed MP estimates) → roughly **3–4 calendar weeks for two engineers** including review overhead.
+≈60–70h of build (the guide's summed MP estimates) → roughly 3–4 calendar weeks for two engineers, including review overhead.
 
 ### Rules of the road (unchanged)
 
 - One MP per PR; every PR keeps **`bun test` green** _and_ **`tsc --noEmit` clean** (`bun run check`).
-- Everything stays behind `MINIMA_TUI_GROUND_TRUTH` (off by default) — `main` stays shippable after every merge.
-- Both tracks touch `ground_truth.ts` and `minima_db.ts` (different functions, same files) — **rebase Track B onto Track A's merges** frequently rather than letting the branches diverge.
+- Everything stays behind `MINIMA_TUI_BIG_PLAN` (ON by default; opt out with `MINIMA_TUI_BIG_PLAN=0`) — `main` stays shippable after every merge.
+- Both tracks touch `big_plan.ts` and `minima_db.ts` (different functions, same files) — **rebase Track B onto Track A's merges** frequently rather than letting the branches diverge.
 
 ---
 

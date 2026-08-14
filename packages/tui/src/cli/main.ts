@@ -227,11 +227,12 @@ export interface CliArgs {
   /** Turn on the experimental umbrella (same as MINIMA_TUI_EXPERIMENTAL=1). */
   experimental?: boolean;
   /**
-   * Opt-in fullscreen renderer (ADR decision-inline-renderer.md, 2026-07-31 amendment):
-   * alternate screen, in-app scroll viewport with the composer glued to the bottom of the
-   * frame, wheel/PgUp/PgDn history scroll. Tri-state: undefined = no explicit flag — main()
-   * falls back to MINIMA_TUI_FULLSCREEN/MINIMA_TUI_INLINE, then the per-project persisted
-   * /fullscreen preference, then the inline default (native scroll + select + copy).
+   * Fullscreen renderer, on by default (ADR decision-inline-renderer.md, 2026-07-31
+   * amendment): alternate screen, in-app scroll viewport with the composer glued to the
+   * bottom of the frame, wheel/PgUp/PgDn history scroll. Tri-state: undefined = no explicit
+   * flag — main() falls back to MINIMA_TUI_INLINE/MINIMA_TUI_FULLSCREEN, then the per-project
+   * persisted /fullscreen preference, then fullscreen. `false` (--inline / --no-fullscreen)
+   * selects the inline renderer: native scroll + select + copy.
    */
   fullscreen?: boolean;
 }
@@ -1200,10 +1201,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     });
   }
 
-  // One renderer — inline (like Claude Code's REPL): main buffer + Ink <Static> commits finished
-  // output to the terminal's NATIVE scrollback, so wheel scroll + click-drag select + copy are
-  // all the terminal's own — simultaneously, no mouse capture. installInputFilter strips stray
-  // wheel SGR + captures bracketed pastes before Ink's key parser sees them.
+  // Both renderers share this boot path. Inline (like Claude Code's REPL): main buffer + Ink
+  // <Static> commits finished output to the terminal's NATIVE scrollback, so wheel scroll +
+  // click-drag select + copy are all the terminal's own — simultaneously, no mouse capture.
+  // Fullscreen — the default, selected below — scrolls in-app on the alternate screen instead.
+  // installInputFilter strips stray wheel SGR + captures bracketed pastes before Ink's key
+  // parser sees them.
   installInputFilter();
   if (process.env.MINIMA_TUI_DEBUG_ANCHOR) {
     installAnchorWriteTap(process.env.MINIMA_TUI_DEBUG_ANCHOR);
