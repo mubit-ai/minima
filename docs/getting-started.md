@@ -20,8 +20,6 @@ uv sync --extra dev
 Optional extras:
 
 ```bash
-uv sync --extra reasoner-anthropic   # enable the Anthropic cheap-LLM reasoner (escalation)
-uv sync --extra reasoner-gemini      # enable the Gemini reasoner
 uv sync --extra seed                 # enable RouterBench cold-start seeding (HF datasets)
 ```
 
@@ -31,9 +29,9 @@ uv sync --extra seed                 # enable RouterBench cold-start seeding (HF
 cp .env.example .env
 ```
 
-The only required value is `MUBIT_API_KEY` (a Mubit **data-plane** key for the instance
-Minima should read/write). If your Mubit instance is not local, also set `MUBIT_ENDPOINT`.
-Everything else has sensible defaults — see **[Configuration](configuration.md)**.
+The only required value is `MUBIT_API_KEY` (a Mubit data-plane key for the instance Minima
+should read/write). If your Mubit instance is not local, also set `MUBIT_ENDPOINT`.
+Everything else has sensible defaults. See **[Configuration](configuration.md)**.
 
 > **Local runtime note:** the bundled `.env.example` sets `MUBIT_TRANSPORT=http`. The local
 > runtime's gRPC `QueryMode` enum does not include `direct_bypass`, so HTTP is the proven
@@ -44,13 +42,12 @@ Everything else has sensible defaults — see **[Configuration](configuration.md
 ## 3. (Optional) Seed cold-start memory
 
 With no history, Minima falls back to capability priors (`decision_basis: "prior"`, a
-`cold_start` warning) and the cheap-LLM reasoner fires more often. Seed a base of history so
-day-one recommendations are grounded:
+`cold_start` warning). Seed a base of history so day-one recommendations are grounded:
 
 ```bash
-uv run minima-seed --limit 2000 --lane minima:default
+uv run minima-seed --dataset routerbench --limit 2000 --lane minima:default
 # or, no external dataset download:
-uv run minima-seed --dataset synthetic --limit 2000 --lane minima:default
+uv run minima-seed --limit 2000 --lane minima:default  # synthetic, the default
 ```
 
 See **[Cold-Start Seeding](seeding.md)** for details.
@@ -77,12 +74,12 @@ curl -s http://localhost:8080/v1/recommend \
 ```
 
 You get back a `recommendation_id`, a `recommended_model`, a ranked candidate list, a
-`fallback_model`, and a `decision_basis` (`memory` | `prior` | `llm`). Run that model in
-**your own** stack — Minima does not call it for you.
+`fallback_model`, and a `decision_basis` (`memory` | `prior`). Run that model in your own
+stack; Minima does not call it for you.
 
 ## 6. Close the loop
 
-Tell Minima how it went. This is what makes the next recommendation sharper — and it
+Tell Minima how it went. This is what makes the next recommendation sharper, and it
 populates the realized cost/token history that powers accurate cost ranking.
 
 ```bash

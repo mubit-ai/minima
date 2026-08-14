@@ -1,12 +1,14 @@
 # Configuration
 
 All configuration is via environment variables, read from the process environment or a
-local `.env` file (case-insensitive). The only **required** value is `MUBIT_API_KEY` (in
-single-tenant mode). A complete annotated template ships as
+local `.env` file (case-insensitive). The only required value is `MUBIT_API_KEY` (in
+single-tenant mode). This page covers the settings you are most likely to touch;
+[`src/minima/config.py`](../src/minima/config.py) is the authoritative list of every
+setting the server reads, and an annotated template ships as
 [`.env.example`](../.env.example).
 
-> This page covers the **server** (`src/minima/`). The `minima` CLI/TUI harness has its own
-> flag set — see [Harness Architecture § Key environment
+> This page covers the server (`src/minima/`). The `minima` CLI/TUI harness has its own
+> flag set: see [Harness Architecture § Key environment
 > flags](harness-architecture.md#key-environment-flags).
 
 ## Mubit memory backend
@@ -78,23 +80,21 @@ The `/v1/health` response reports the active classifier (`classifier.id`,
 `classifier_id` per request, so mixed fleets are attributable during a rollout.
 
 
-## Selection-bias correction (inverse propensity weighting)
+## Selection policy
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `MINIMA_IPW_ENABLED` | `true` | Re-weight aggregates by inverse logging propensity. |
-| `MINIMA_IPW_CLIP_LOW` | `0.1` | Lower clip on the IPW factor. |
-| `MINIMA_IPW_CLIP_HIGH` | `10.0` | Upper clip on the IPW factor. |
+| `MINIMA_SELECTION_POLICY` | `thompson` | `thompson` samples each candidate's success rate per decision and picks the cheapest sample clearing tau — exploration is self-tuning and the sampling frequencies are the logged propensities. `argmin` = deterministic cheapest-clearing-tau. |
+| `MINIMA_THOMPSON_SAMPLES` | `128` | Monte-Carlo samples per decision under `thompson`. |
+| `MINIMA_ARGMIN_ORGS` | *(empty)* | Comma-separated orgs that opt out of Thompson back to `argmin`. |
+| `MINIMA_EXPLORE_SHARE_CAP` | `0.25` | Cap on the running share of decisions where Thompson deviates from the argmin pick (per org, per process); above it the argmin pick is used with an `explore_budget_capped` warning. `1.0` = uncapped. |
 
 ## Learning maturity
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `MINIMA_CLUSTER_GRANULARITY` | `coarse` | `coarse` = `task_type:difficulty`; `fine` appends a salient-keyword signature so distinct topics accumulate separately. |
-| `MINIMA_CLUSTER_SIGNATURE_TOKENS` | `4` | Keywords in the `fine` signature. |
 | `MINIMA_LESSON_ON_VERIFIED_PROD` | `true` | Promote a verified-prod strong success to a durable Lesson. |
 | `MINIMA_LESSON_MIN_QUALITY` | `0.8` | Quality floor for lesson promotion. |
-| `MINIMA_EXPLORATION_BONUS` | `0.0` | Optimistic bonus for under-explored candidates (0 = pure exploitation). |
 
 ## Catalog
 
@@ -102,9 +102,7 @@ The `/v1/health` response reports the active classifier (`classifier.id`,
 |----------|---------|-------|
 | `MINIMA_CATALOG_REFRESH_SECONDS` | `21600` | Background price/capability refresh interval (6h). |
 | `MINIMA_CATALOG_STALE_AFTER_SECONDS` | `86400` | Age beyond which prices are flagged stale (24h). |
-| `MINIMA_LITELLM_PRICES_URL` | LiteLLM prices JSON | Primary price source. |
-| `MINIMA_OPENROUTER_MODELS_URL` | OpenRouter models API | Caching flags + context windows. |
-| `OPENROUTER_API_KEY` | — | Optional, for the OpenRouter source. |
+| `MINIMA_LITELLM_PRICES_URL` | LiteLLM prices JSON | Price source — also supplies caching flags and context windows, overlaid onto the checked-in capability snapshot. |
 
 ## Service
 
@@ -113,13 +111,17 @@ The `/v1/health` response reports the active classifier (`classifier.id`,
 | `MINIMA_HOST` | `0.0.0.0` | |
 | `MINIMA_PORT` | `8080` | A local Mubit embedder often owns `:8080` — pick another if colliding. |
 | `MINIMA_LOG_LEVEL` | `info` | |
-| `MINIMA_RECOMMENDATION_STORE` | `memory` | `memory` \| `sqlite` (durable across restarts) \| `redis`. |
-| `MINIMA_RECOMMENDATION_TTL_SECONDS` | `86400` | How long a `recommendation_id` stays resolvable for feedback. |
+| `MINIMA_RECOMMENDATION_STORE` | `memory` | `memory` \| `sqlite` (one node, durable across restarts) \| `cloudsql` (PostgreSQL; required for multi-instance). Controls the decision log, propensity, and — unless `MINIMA_RECSTORE_BACKEND` overrides — the recstore. |
+| `MINIMA_RECOMMENDATION_TTL_SECONDS` | `604800` | How long a `recommendation_id` stays resolvable for feedback (7 days — feedback often arrives well after the recommendation). |
 | `MINIMA_SQLITE_PATH` | `minima_state.db` | Backing file for the sqlite recstore + propensity. |
+| `MINIMA_DATABASE_URL` | — | PostgreSQL DSN. Required when the store is `cloudsql`. |
+| `MINIMA_RECSTORE_BACKEND` | *(empty)* | Backend override for the recstore + durable refs only: `memory` \| `sqlite` \| `cloudsql` \| `redis`. Empty = inherit `MINIMA_RECOMMENDATION_STORE`. |
+| `MINIMA_REDIS_URL` | `redis://localhost:6379/0` | Required when `MINIMA_RECSTORE_BACKEND=redis`. |
 
 The recommendation store resolves a `recommendation_id` back to the recalled neighbors at
 feedback time. `memory` is process-local (lost on restart); use `sqlite` to survive
-restarts so in-flight recommendations can still receive feedback.
+restarts so in-flight recommendations can still receive feedback, or `cloudsql` so any
+instance can resolve any recommendation.
 
 ## Multi-tenancy
 

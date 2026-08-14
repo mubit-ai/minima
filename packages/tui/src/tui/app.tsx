@@ -1508,7 +1508,7 @@ export function HarnessApp({
   // suspended (draft survives).
   const [panel, setPanel] = useState<PanelState | null>(null);
   const panelCapture = panel !== null;
-  // Opt-in fullscreen renderer (main.ts already entered the alt screen when initial=true;
+  // Fullscreen renderer, on by default (main.ts already entered the alt screen when initial=true;
   // the /fullscreen command owns mid-session transitions). Scroll state: null = pinned to
   // the newest line (follow — structural, no follow effect); {topLine} = anchored into the
   // virtual line space. The ref mirrors the current totals so key/wheel handlers can clamp

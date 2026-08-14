@@ -6,7 +6,7 @@ durability, and what to watch.
 ## Running the service
 
 Minima is an ASGI app (`minima.main:app`). The server stack (fastapi/uvicorn/psycopg2/redis)
-lives in the **`server`** optional-dependency group — install it with `pip install
+lives in the `server` optional-dependency group. Install it with `pip install
 "minima[server]"` (or `uv sync --extra server`); `make run` and the dev extra include it. For
 local/dev:
 
@@ -21,10 +21,10 @@ uv run --extra server uvicorn minima.main:app --host 0.0.0.0 --port 8080 --worke
 ```
 
 > **Worker note:** the default recommendation store (`memory`) and propensity tracking are
-> **per-process**, so a `recommendation_id` minted by one worker may not resolve in another,
+> per-process, so a `recommendation_id` minted by one worker may not resolve in another,
 > and feedback can miss. For multi-worker deployments set
 > `MINIMA_RECOMMENDATION_STORE=sqlite` (shared backing file) so any worker can resolve any
-> recommendation. The catalog refresh loop also runs per process — that's harmless
+> recommendation. The catalog refresh loop also runs per process, which is harmless
 > (idempotent refresh), just slightly redundant.
 
 ## Health and readiness
@@ -36,12 +36,12 @@ uv run --extra server uvicorn minima.main:app --host 0.0.0.0 --port 8080 --worke
   "mubit": {"reachable": true, "transport": "http", "latency_ms": 12},
   "auth": "passthrough",
   "catalog": {"version": "…", "cost_source": "…", "stale": false, "models": 42},
-  "reasoner": {"provider": "none", "configured": false},
+  "classifier": {"id": "…", "embed_loaded": true, "required": false},
   "version": "0.1.0" }
 ```
 
-- Use `status == "ok"` (or `mubit.reachable != false`) for a **readiness** probe.
-- For a **liveness** probe, any `200` from `/v1/health` suffices — it doesn't require Mubit.
+- Use `status == "ok"` (or `mubit.reachable != false`) for a readiness probe.
+- For a liveness probe, any `200` from `/v1/health` suffices; it doesn't require Mubit.
 - An unauthenticated probe gets liveness only; pass a Mubit key to also check that org's
   Mubit reachability.
 
@@ -54,8 +54,7 @@ Minima keeps serving when its dependencies wobble:
 | Mubit recall slow | Recall is bounded by `MINIMA_MEMORY_RECALL_TIMEOUT_MS`; on breach → prior-only + `recall_timeout`. |
 | Mubit down | `/recommend` serves prior-only (`memory_unavailable`); `/health` reports `degraded`. |
 | Stale prices | Last-good price snapshot used; `catalog_stale: true` + `prices_stale` warning. |
-| Reasoner error | Deterministic result + `reasoner_failed`. |
-| No reasoner configured | Escalation suggestions are surfaced as warnings but never block. |
+| Thin/conflicting evidence | Escalation is diagnostic only: `escalation_suggested:*` warnings + decision-log reasons, never a block. The harness owns the cascade. |
 
 The recommendation path makes exactly one hot Mubit call (recall). Writes
 (`/feedback`) are not on the recommendation hot path, and reflection runs fire-and-forget.
@@ -65,8 +64,8 @@ The recommendation path makes exactly one hot Mubit call (recall). Writes
 A background task refreshes model prices and capability data every
 `MINIMA_CATALOG_REFRESH_SECONDS` (6h default):
 
-- **Prices** from LiteLLM (primary) + OpenRouter (caching flags, context windows). On a
-  fetch failure the last-good snapshot is kept and flagged stale after
+- **Prices** from LiteLLM, whose entries also supply caching flags and context windows.
+  On a fetch failure the last-good snapshot is kept and flagged stale after
   `MINIMA_CATALOG_STALE_AFTER_SECONDS` (24h).
 - **Capability priors** ship as a checked-in static snapshot
   (`catalog/data/capability_priors.json`) loaded at startup with zero network dependency, so
@@ -80,16 +79,18 @@ A background task refreshes model prices and capability data every
 | Concern | Setting |
 |---------|---------|
 | Recommendations survive restart (so feedback resolves) | `MINIMA_RECOMMENDATION_STORE=sqlite` |
-| Recommendation resolution window | `MINIMA_RECOMMENDATION_TTL_SECONDS` (default 24h) |
-| Tenant registry survives restart | `MINIMA_TENANT_STORE=sqlite` |
-| Backing file location | `MINIMA_SQLITE_PATH`, `MINIMA_TENANT_STORE_PATH` |
+| Recommendation resolution window | `MINIMA_RECOMMENDATION_TTL_SECONDS` (default 7 days) |
+| Backing file location | `MINIMA_SQLITE_PATH` |
 
-Mount the sqlite paths on durable storage if you rely on them.
+Mount the sqlite path on durable storage if you rely on it. There is no tenant registry to
+persist: auth is pass-through, and a tenant's context is an in-process cache rebuilt from
+the caller's own Mubit key after a restart.
 
 ## What to monitor
 
-- **Escalation rate** — fraction of recommendations with `reasoner_consulted`. High and not
-  falling over time suggests thin memory; seed more or check that feedback is flowing.
+- **Escalation rate** — fraction of recommendations carrying an `escalation_suggested:*`
+  warning. High and not falling over time suggests thin memory; seed more or check that
+  feedback is flowing.
 - **`decision_basis` distribution** — the share of `memory` vs `prior` should rise as
   feedback accumulates. A stuck-high `prior` share means the loop isn't closing.
 - **`cold_start` / `recall_timeout` / `memory_unavailable` warning rates** — recall health.
@@ -101,8 +102,8 @@ Mount the sqlite paths on durable storage if you rely on them.
 ## Secret hygiene
 
 - Never log or echo Mubit keys or provider API keys. Auth is pass-through, so every bearer
-  token IS a live Mubit credential — treat request logs accordingly.
-- Use a Mubit **data-plane** key (not an admin key) for `MUBIT_API_KEY`.
+  token is a live Mubit credential; treat request logs accordingly.
+- Use a Mubit data-plane key (not an admin key) for `MUBIT_API_KEY`.
 
 ## Tests in CI
 
@@ -113,5 +114,5 @@ make live    # end-to-end; requires a running Mubit (make run-mubit)
 make eval    # offline RouterBench savings evaluation
 ```
 
-Offline tests are hermetic with respect to a populated `.env` (the reasoner provider is
-forced off for unit/integration), so a developer's local config can't leak into the suite.
+Offline tests are hermetic with respect to a populated `.env` (an autouse fixture
+neutralizes it), so a developer's local config can't leak into the suite.

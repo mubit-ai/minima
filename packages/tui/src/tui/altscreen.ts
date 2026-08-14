@@ -1,5 +1,5 @@
 /**
- * Alternate-screen lifecycle for the opt-in fullscreen renderer (ADR
+ * Alternate-screen lifecycle for the default fullscreen renderer (ADR
  * decision-inline-renderer.md, 2026-07-31 amendment). The ONLY writers of the alt-screen
  * escapes — main.ts stays free of the literal (tests/render-buffer.test.ts pins that), and
  * the tracked state makes enter/exit idempotent so suspend/shutdown can call them blind.
