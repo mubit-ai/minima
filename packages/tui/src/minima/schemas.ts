@@ -348,6 +348,7 @@ export interface StrategiesResponse {
   lane: string;
   strategies?: Strategy[];
   count?: number;
+  warnings?: string[];
 }
 
 export interface Strategy {

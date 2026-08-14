@@ -35,6 +35,10 @@ export class MinimaUnavailable extends MinimaError {
 }
 
 function extractDetail(body: unknown): string {
+  // A non-JSON body (proxy HTML, empty 502/504) parses to null — JSON.stringify would
+  // render the literal string "null" as the error message. Return empty so raiseForStatus
+  // falls back to the status, which is the only real information such a response carries.
+  if (body === null || body === undefined) return "";
   if (body && typeof body === "object" && "detail" in body) {
     const detail = (body as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
@@ -54,7 +58,7 @@ export function raiseForStatus(
   retryAfter: number | null = null,
 ): void {
   if (status >= 200 && status < 300) return;
-  const detail = extractDetail(body);
+  const detail = extractDetail(body) || `HTTP ${status}`;
   if (status === 429) throw new MinimaRateLimited(detail, status, body, retryAfter);
   if (status === 502 || status === 503 || status === 504)
     throw new MinimaUnavailable(detail, status, body);
