@@ -30,6 +30,7 @@ until enough stochastic logs accumulate.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from minima.recommender.decisionlog import CandidateSnapshot, DecisionRecord
@@ -181,8 +182,11 @@ def _snips_value(views: list[_RowView]) -> float:
 
 
 def _percentile(values: list[float], q: float) -> float:
+    """Nearest-rank percentile. ``int(q * n)`` lands one past the rank and returns the
+    MAXIMUM for every n <= 20, which would make SWITCH's threshold unreachable (and the
+    estimator arithmetically identical to DR) exactly where the log is thinnest."""
     ordered = sorted(values)
-    idx = min(len(ordered) - 1, max(0, int(q * len(ordered))))
+    idx = min(len(ordered) - 1, max(0, math.ceil(q * len(ordered)) - 1))
     return ordered[idx]
 
 
